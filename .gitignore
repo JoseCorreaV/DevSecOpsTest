@@ -1,0 +1,22 @@
+# Terraform
+**/.terraform/*
+**/*.tfstate
+**/*.tfstate.*
+crash.log
+crash.*.log
+
+# Terraform vars (si llegas a meter secretos)
+*.tfvars
+*.tfvars.json
+
+# Python
+__pycache__/
+*.pyc
+.venv/
+venv/
+
+# OS/IDE
+.DS_Store
+Thumbs.db
+.vscode/
+.idea/

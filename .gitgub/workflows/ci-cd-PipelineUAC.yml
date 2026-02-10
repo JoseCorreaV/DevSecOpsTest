@@ -1,0 +1,104 @@
+name: CI-CD
+
+on:
+  push:
+    branches: [develop]
+  pull_request:
+    branches: [develop]
+
+permissions:
+  id-token: write
+  contents: write
+
+env:
+  TF_DIR: ./terraform
+  APP_IMAGE_NAME: techflow-app
+  JOB_IMAGE_NAME: techflow-job
+
+jobs:
+  build-security-deploy:
+    runs-on: ubuntu-latest
+
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Setup Ter:contentReference[oaicite:24]{index=24}p/setup-terraform@v3
+
+      - name: Terraform fmt
+        working-directory: ${{ env.TF_DIR }}
+        run: terraform fmt -check -recursive
+
+      - name: Terraform init
+        working-directory: ${{ env.TF_DIR }}
+        run: terraform init
+
+      - name: Terraform validate
+        working-directory: ${{ env.TF_DIR }}
+        run: terraform validate
+
+      # IaC Scan (Checkov). Puedes cambiar por tfsec si prefieres.
+      - name: IaC scan (Checkov)
+        uses: bridgecrewio/checkov-action@v12
+        with:
+          directory: ${{ env.TF_DIR }}
+          quiet: true
+
+      - name: Azure Login (OIDC)
+        uses: azure/login@v2
+        with:
+          client-id: ${{ secrets.AZURE_CLIENT_ID }}
+          tenant-id: ${{ secrets.AZURE_TENANT_ID }}
+          subscription-id: ${{ secrets.AZURE_SUBSCRIPTION_ID }}
+
+      # Obtén ACR login server desde Terraform output (cuando ya exista) o usa una variable fija.
+      # Lo más simple para la prueba: define ACR_NAME en terraform.tfvars y repítelo aquí como env var.
+      - name: Azure CLI - Show account
+        run: az account show
+
+      - name: Docker build (app)
+        run: |
+          docker build -t $APP_IMAGE_NAME:${{ github.sha }} ./app
+
+      - name: Docker build (job)
+        run: |
+          docker build -t $JOB_IMAGE_NAME:${{ github.sha }} ./job
+
+      - name: Trivy scan (app image)
+        uses: aquasecurity/trivy-action@0.24.0
+        with:
+          image-ref: ${{ env.APP_IMAGE_NAME }}:${{ github.sha }}
+          format: table
+          exit-code: "1"
+          severity: "CRITICAL,HIGH"
+
+      - name: Trivy scan (job image)
+        uses: aquasecurity/trivy-action@0.24.0
+        with:
+          image-ref: ${{ env.JOB_IMAGE_NAME }}:${{ github.sha }}
+          format: table
+          exit-code: "1"
+          severity: "CRITICAL,HIGH"
+
+      # Login a ACR y push
+      - name: ACR login
+        run: |
+          az acr login --name ${{ vars.ACR_NAME }}
+
+      - name: Tag & Push images to ACR
+        run: |
+          ACR_LOGIN_SERVER=$(az acr show -n ${{ vars.ACR_NAME }} --query loginServer -o tsv)
+
+          docker tag $APP_IMAGE_NAME:${{ github.sha }} $ACR_LOGIN_SERVER/$APP_IMAGE_NAME:${{ github.sha }}
+          docker push $ACR_LOGIN_SERVER/$APP_IMAGE_NAME:${{ github.sha }}
+
+          docker tag $JOB_IMAGE_NAME:${{ github.sha }} $ACR_LOGIN_SERVER/$JOB_IMAGE_NAME:${{ github.sha }}
+          docker push $ACR_LOGIN_SERVER/$JOB_IMAGE_NAME:${{ github.sha }}
+
+      # Deploy con Terraform apply
+      - name: Terraform apply
+        working-directory: ${{ env.TF_DIR }}
+        env:
+          TF_VAR_app_image_tag: ${{ github.sha }}
+          TF_VAR_job_image_tag: ${{ github.sha }}
+        run: terraform apply -auto-approve
