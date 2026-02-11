@@ -5,4 +5,9 @@ resource "azurerm_container_registry" "this" {
 
   sku           = "Basic"
   admin_enabled = false
+
+  # Esto sí aplica (aunque no necesariamente te quita todos los checks)
+  public_network_access_enabled = true
+  export_policy_enabled         = true
+  network_rule_bypass_option    = "AzureServices"
 }
