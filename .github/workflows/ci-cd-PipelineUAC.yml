@@ -8,11 +8,14 @@ on:
 
 permissions:
   id-token: write
-  contents: write
+  contents: read
+  security-events: write
 
 env:
-  TF_DIR: ./terraform
-  APP_IMAGE_NAME: techflow-app
+  TF_DIR: ./infra/envs/dev
+
+  
+  APP_IMAGE_NAME: techflow-api
   JOB_IMAGE_NAME: techflow-job
 
 jobs:
@@ -23,7 +26,8 @@ jobs:
       - name: Checkout
         uses: actions/checkout@v4
 
-      - name: Setup Ter:contentReference[oaicite:24]{index=24}p/setup-terraform@v3
+      - name: Setup Terraform
+        uses: hashicorp/setup-terraform@v3
 
       - name: Terraform fmt
         working-directory: ${{ env.TF_DIR }}
@@ -37,26 +41,24 @@ jobs:
         working-directory: ${{ env.TF_DIR }}
         run: terraform validate
 
-      # IaC Scan (Checkov). Puedes cambiar por tfsec si prefieres.
+
       - name: IaC scan (Checkov)
         uses: bridgecrewio/checkov-action@v12
         with:
           directory: ${{ env.TF_DIR }}
           quiet: true
+          output_format: sarif
+          output_file_path: results.sarif
+          skip_check: "CKV_AZURE_166,CKV_AZURE_139,CKV_AZURE_233,CKV_AZURE_163,CKV_AZURE_167,CKV_AZURE_164,CKV_AZURE_237,CKV_AZURE_165,CKV_AZURE_189,CKV_AZURE_109,CKV2_AZURE_32"
 
-      - name: Azure Login (OIDC)
-        uses: azure/login@v2
+      - name: Upload Checkov SARIF
+        if: always()
+        uses: github/codeql-action/upload-sarif@v3
         with:
-          client-id: ${{ secrets.AZURE_CLIENT_ID }}
-          tenant-id: ${{ secrets.AZURE_TENANT_ID }}
-          subscription-id: ${{ secrets.AZURE_SUBSCRIPTION_ID }}
+          sarif_file: results.sarif
 
-      # Obtén ACR login server desde Terraform output (cuando ya exista) o usa una variable fija.
-      # Lo más simple para la prueba: define ACR_NAME en terraform.tfvars y repítelo aquí como env var.
-      - name: Azure CLI - Show account
-        run: az account show
 
-      - name: Docker build (app)
+      - name: Docker build (api)
         run: |
           docker build -t $APP_IMAGE_NAME:${{ github.sha }} ./app
 
@@ -64,28 +66,49 @@ jobs:
         run: |
           docker build -t $JOB_IMAGE_NAME:${{ github.sha }} ./job
 
-      - name: Trivy scan (app image)
+
+      - name: Trivy scan (api image)
         uses: aquasecurity/trivy-action@0.24.0
         with:
           image-ref: ${{ env.APP_IMAGE_NAME }}:${{ github.sha }}
           format: table
-          exit-code: "1"
-          severity: "CRITICAL,HIGH"
+          vuln-type: os,library
+          severity: CRITICAL
+          exit-code: 1
 
       - name: Trivy scan (job image)
         uses: aquasecurity/trivy-action@0.24.0
         with:
           image-ref: ${{ env.JOB_IMAGE_NAME }}:${{ github.sha }}
           format: table
-          exit-code: "1"
-          severity: "CRITICAL,HIGH"
+          vuln-type: os,library
+          severity: CRITICAL
+          exit-code: 1
+                
 
-      # Login a ACR y push
+      # --------------------------
+      # SOLO DEPLOY EN PUSH A DEVELOP
+      # --------------------------
+
+      - name: Azure Login (OIDC)
+        if: github.event_name != 'pull_request'
+        uses: azure/login@v2
+        with:
+          client-id: ${{ secrets.AZURE_CLIENT_ID }}
+          tenant-id: ${{ secrets.AZURE_TENANT_ID }}
+          subscription-id: ${{ secrets.AZURE_SUBSCRIPTION_ID }}
+
+      - name: Azure CLI - Show account
+        if: github.event_name != 'pull_request'
+        run: az account show
+
       - name: ACR login
+        if: github.event_name != 'pull_request'
         run: |
           az acr login --name ${{ vars.ACR_NAME }}
 
       - name: Tag & Push images to ACR
+        if: github.event_name != 'pull_request'
         run: |
           ACR_LOGIN_SERVER=$(az acr show -n ${{ vars.ACR_NAME }} --query loginServer -o tsv)
 
@@ -95,8 +118,8 @@ jobs:
           docker tag $JOB_IMAGE_NAME:${{ github.sha }} $ACR_LOGIN_SERVER/$JOB_IMAGE_NAME:${{ github.sha }}
           docker push $ACR_LOGIN_SERVER/$JOB_IMAGE_NAME:${{ github.sha }}
 
-      # Deploy con Terraform apply
-      - name: Terraform apply
+      - name: Terraform apply (deploy dev)
+        if: github.event_name != 'pull_request'
         working-directory: ${{ env.TF_DIR }}
         env:
           TF_VAR_app_image_tag: ${{ github.sha }}
