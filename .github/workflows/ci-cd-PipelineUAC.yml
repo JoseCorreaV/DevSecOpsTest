@@ -28,18 +28,23 @@ jobs:
     runs-on: ubuntu-latest
 
     steps:
-      - uses: actions/checkout@v4
+      - name: Checkout
+        uses: actions/checkout@v4
 
-      - uses: azure/login@v2
+      - name: Azure Login (OIDC)
+        uses: azure/login@v2
         with:
           client-id: ${{ secrets.AZURE_CLIENT_ID }}
           tenant-id: ${{ secrets.AZURE_TENANT_ID }}
           subscription-id: ${{ secrets.AZURE_SUBSCRIPTION_ID }}
 
-      - uses: hashicorp/setup-terraform@v3
+      - name: Setup Terraform
+        uses: hashicorp/setup-terraform@v3
         with:
           terraform_wrapper: false
 
+      # PR -> pr-<num>.tfstate
+      # push -> <branch>.tfstate
       - name: Set TFSTATE key
         shell: bash
         run: |
@@ -50,12 +55,13 @@ jobs:
             TFSTATE_KEY="${{ github.ref_name }}.tfstate"
           fi
           echo "TFSTATE_KEY=$TFSTATE_KEY" >> "$GITHUB_ENV"
+          echo "TFSTATE_KEY=$TFSTATE_KEY"
 
       - name: Terraform fmt
         working-directory: ${{ env.TF_DIR }}
         run: terraform fmt -check -recursive
 
-      - name: Terraform init
+      - name: Terraform init (remote state using Azure AD)
         working-directory: ${{ env.TF_DIR }}
         run: |
           terraform init \
@@ -69,6 +75,7 @@ jobs:
         working-directory: ${{ env.TF_DIR }}
         run: terraform validate
 
+      # Plan robusto: permite exit 0 y 2; falla solo con 1
       - name: Terraform plan
         working-directory: ${{ env.TF_DIR }}
         shell: bash
@@ -91,3 +98,98 @@ jobs:
             exit 1
           fi
           exit 0
+
+      # Seguridad IaC (Checkov) - requerido por el doc :contentReference[oaicite:6]{index=6}
+      - name: IaC scan (Checkov)
+        continue-on-error: true
+        uses: bridgecrewio/checkov-action@v12
+        with:
+          directory: ${{ env.TF_DIR }}
+          quiet: true
+          output_format: sarif
+          output_file_path: checkov.sarif
+
+      - name: Upload Checkov SARIF
+        if: always()
+        continue-on-error: true
+        uses: github/codeql-action/upload-sarif@v3
+        with:
+          sarif_file: checkov.sarif
+
+      # Build imágenes (requerido por el doc) :contentReference[oaicite:7]{index=7}
+      - name: Docker build (api)
+        run: docker build -t ${{ env.APP_IMAGE_NAME }}:${{ github.sha }} ./app
+
+      - name: Docker build (job)
+        run: docker build -t ${{ env.JOB_IMAGE_NAME }}:${{ github.sha }} ./job
+
+      # Seguridad imágenes (Trivy) - requerido por el doc :contentReference[oaicite:8]{index=8}
+      - name: Trivy scan (api)
+        continue-on-error: true
+        uses: aquasecurity/trivy-action@0.24.0
+        with:
+          image-ref: ${{ env.APP_IMAGE_NAME }}:${{ github.sha }}
+          scan-type: image
+          format: sarif
+          output: trivy-api.sarif
+          vuln-type: os,library
+          severity: CRITICAL,HIGH
+          exit-code: "0"
+
+      - name: Upload Trivy SARIF (api)
+        if: always()
+        continue-on-error: true
+        uses: github/codeql-action/upload-sarif@v3
+        with:
+          sarif_file: trivy-api.sarif
+
+      - name: Trivy scan (job)
+        continue-on-error: true
+        uses: aquasecurity/trivy-action@0.24.0
+        with:
+          image-ref: ${{ env.JOB_IMAGE_NAME }}:${{ github.sha }}
+          scan-type: image
+          format: sarif
+          output: trivy-job.sarif
+          vuln-type: os,library
+          severity: CRITICAL,HIGH
+          exit-code: "0"
+
+      - name: Upload Trivy SARIF (job)
+        if: always()
+        continue-on-error: true
+        uses: github/codeql-action/upload-sarif@v3
+        with:
+          sarif_file: trivy-job.sarif
+
+      # Push a ACR (solo develop/main) - requerido por el doc :contentReference[oaicite:9]{index=9}
+      - name: ACR login
+        if: github.event_name == 'push' && (github.ref_name == 'develop' || github.ref_name == 'main')
+        run: az acr login --name ${{ vars.ACR_NAME }}
+
+      - name: Tag & Push images to ACR
+        if: github.event_name == 'push' && (github.ref_name == 'develop' || github.ref_name == 'main')
+        shell: bash
+        run: |
+          set -euo pipefail
+          ACR_LOGIN_SERVER=$(az acr show -n "${{ vars.ACR_NAME }}" --query loginServer -o tsv)
+
+          docker tag ${{ env.APP_IMAGE_NAME }}:${{ github.sha }} $ACR_LOGIN_SERVER/${{ env.APP_IMAGE_NAME }}:${{ github.sha }}
+          docker push $ACR_LOGIN_SERVER/${{ env.APP_IMAGE_NAME }}:${{ github.sha }}
+
+          docker tag ${{ env.JOB_IMAGE_NAME }}:${{ github.sha }} $ACR_LOGIN_SERVER/${{ env.JOB_IMAGE_NAME }}:${{ github.sha }}
+          docker push $ACR_LOGIN_SERVER/${{ env.JOB_IMAGE_NAME }}:${{ github.sha }}
+
+      # Deploy (solo develop/main) - requerido por el doc :contentReference[oaicite:10]{index=10}
+      - name: Terraform apply (deploy)
+        if: github.event_name == 'push' && (github.ref_name == 'develop' || github.ref_name == 'main')
+        working-directory: ${{ env.TF_DIR }}
+        env:
+          TF_VAR_app_image_tag: ${{ github.sha }}
+          TF_VAR_job_image_tag: ${{ github.sha }}
+          TF_VAR_my_secret_value: ${{ secrets.MY_SECRET_VALUE }}
+          ARM_USE_OIDC: true
+          ARM_CLIENT_ID: ${{ secrets.AZURE_CLIENT_ID }}
+          ARM_TENANT_ID: ${{ secrets.AZURE_TENANT_ID }}
+          ARM_SUBSCRIPTION_ID: ${{ secrets.AZURE_SUBSCRIPTION_ID }}
+        run: terraform apply -auto-approve -lock-timeout=5m
