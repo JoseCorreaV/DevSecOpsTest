@@ -1,5 +1,10 @@
 FROM python:3.12-slim
 
+# Actualiza paquetes del SO (reduce CVEs cuando hay fix disponible)
+RUN apt-get update \
+ && apt-get upgrade -y \
+ && rm -rf /var/lib/apt/lists/*
+
 WORKDIR /app
 COPY requirements.txt .
 RUN pip install --no-cache-dir -r requirements.txt
