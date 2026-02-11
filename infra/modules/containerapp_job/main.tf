@@ -1,5 +1,8 @@
 data "azurerm_client_config" "current" {}
 
+# Roles para que la UAMI pueda:
+# - PULL en ACR
+# - Leer secretos en KeyVault
 resource "azurerm_role_assignment" "acr_pull" {
   scope                = var.acr_id
   role_definition_name = "AcrPull"
@@ -9,8 +12,6 @@ resource "azurerm_role_assignment" "acr_pull" {
     "6ba7b811-9dad-11d1-80b4-00c04fd430c8",
     "${var.acr_id}|AcrPull|${var.identity_principal_id}"
   )
-
-  skip_service_principal_aad_check = true
 }
 
 resource "azurerm_role_assignment" "kv_secrets_user" {
@@ -28,7 +29,7 @@ resource "azurerm_role_assignment" "kv_secrets_user" {
 
 resource "azapi_resource" "job" {
   type      = "Microsoft.App/jobs@2023-05-01"
-  name      = "${var.prefix}-job"
+  name      = "${var.prefix}job"
   location  = var.location
   parent_id = "/subscriptions/${data.azurerm_client_config.current.subscription_id}/resourceGroups/${var.resource_group_name}"
 
@@ -44,7 +45,7 @@ resource "azapi_resource" "job" {
       environmentId = var.environment_id
 
       configuration = {
-        triggerType       = var.trigger_type
+        triggerType       = "Manual"
         replicaRetryLimit = 0
         replicaTimeout    = 300
 
@@ -62,10 +63,6 @@ resource "azapi_resource" "job" {
             identity    = var.identity_id
           }
         ]
-
-        scheduleTriggerConfig = var.trigger_type == "Schedule" ? {
-          cronExpression = var.cron_expression
-        } : null
       }
 
       template = {
