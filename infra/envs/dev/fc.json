@@ -1,6 +1,0 @@
-﻿{
-  "name": "github-dev",
-  "issuer": "https://token.actions.githubusercontent.com",
-  "subject": "repo:JoseCorreaV/DevSecOpsTest:ref:refs/heads/develop",
-  "audiences": ["api://AzureADTokenExchange"]
-}
