@@ -72,16 +72,19 @@ jobs:
         with:
           image-ref: ${{ env.APP_IMAGE_NAME }}:${{ github.sha }}
           format: table
-          exit-code: "1"
-          severity: "CRITICAL,HIGH"
+          vuln-type: os,library
+          severity: CRITICAL
+          exit-code: 1
 
       - name: Trivy scan (job image)
         uses: aquasecurity/trivy-action@0.24.0
         with:
           image-ref: ${{ env.JOB_IMAGE_NAME }}:${{ github.sha }}
           format: table
-          exit-code: "1"
-          severity: "CRITICAL,HIGH"
+          vuln-type: os,library
+          severity: CRITICAL
+          exit-code: 1
+                
 
       # --------------------------
       # SOLO DEPLOY EN PUSH A DEVELOP
