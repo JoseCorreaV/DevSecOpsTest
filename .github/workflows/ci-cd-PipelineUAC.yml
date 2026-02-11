@@ -24,6 +24,14 @@ jobs:
       - name: Checkout
         uses: actions/checkout@v4
 
+      # Login a Azure DESDE EL INICIO (para que terraform init del backend funcione)
+      - name: Azure Login (OIDC)
+        uses: azure/login@v2
+        with:
+          client-id: ${{ secrets.AZURE_CLIENT_ID }}
+          tenant-id: ${{ secrets.AZURE_TENANT_ID }}
+          subscription-id: ${{ secrets.AZURE_SUBSCRIPTION_ID }}
+
       - name: Setup Terraform
         uses: hashicorp/setup-terraform@v3
 
@@ -34,21 +42,22 @@ jobs:
         working-directory: ${{ env.TF_DIR }}
         run: terraform fmt -check -recursive
 
-      - name: Terraform init
+      - name: Terraform init (remote state using Azure AD)
         working-directory: ${{ env.TF_DIR }}
         run: |
           terraform init \
             -backend-config="resource_group_name=${{ vars.TFSTATE_RG }}" \
             -backend-config="storage_account_name=${{ vars.TFSTATE_STORAGE }}" \
             -backend-config="container_name=${{ vars.TFSTATE_CONTAINER }}" \
-            -backend-config="key=${{ github.ref_name }}.tfstate"
+            -backend-config="key=${{ github.ref_name }}.tfstate" \
+            -backend-config="use_azuread_auth=true"
 
       - name: Terraform validate
         working-directory: ${{ env.TF_DIR }}
         run: terraform validate
 
       # -------------------------
-      # Checkov -> SARIF (no debe romper deploy)
+      # Checkov -> SARIF (no rompe deploy)
       # -------------------------
       - name: IaC scan (Checkov)
         id: checkov
@@ -69,7 +78,6 @@ jobs:
             echo "exists=true" >> "$GITHUB_OUTPUT"
           else
             echo "exists=false" >> "$GITHUB_OUTPUT"
-            echo "results.sarif not found (checkov may have failed)."
           fi
 
       - name: Upload Checkov SARIF
@@ -80,7 +88,7 @@ jobs:
           sarif_file: results.sarif
 
       # -------------------------
-      # Docker build (esto sí es crítico para deploy)
+      # Docker build
       # -------------------------
       - name: Docker build (api)
         run: docker build -t $APP_IMAGE_NAME:${{ github.sha }} ./app
@@ -89,7 +97,7 @@ jobs:
         run: docker build -t $JOB_IMAGE_NAME:${{ github.sha }} ./job
 
       # -------------------------
-      # Trivy -> SARIF (NO bloquea, deja evidencia)
+      # Trivy -> SARIF (no bloquea, solo reporta)
       # -------------------------
       - name: Trivy scan (api image) - SARIF report
         id: trivy_api
@@ -112,7 +120,6 @@ jobs:
             echo "exists=true" >> "$GITHUB_OUTPUT"
           else
             echo "exists=false" >> "$GITHUB_OUTPUT"
-            echo "trivy-api.sarif not found."
           fi
 
       - name: Upload Trivy SARIF (api)
@@ -143,7 +150,6 @@ jobs:
             echo "exists=true" >> "$GITHUB_OUTPUT"
           else
             echo "exists=false" >> "$GITHUB_OUTPUT"
-            echo "trivy-job.sarif not found (scan may have been skipped or did not write output)."
           fi
 
       - name: Upload Trivy SARIF (job)
@@ -153,28 +159,15 @@ jobs:
         with:
           sarif_file: trivy-job.sarif
 
-      # -------------------------
-      # Debug: listar SARIF generados (útil para diagnóstico)
-      # -------------------------
       - name: Debug - list SARIF files
         if: always()
         run: |
-          echo "Workspace content:"
-          ls -la
-          echo "SARIF files found:"
+          echo "SARIF files:"
           find . -maxdepth 3 -type f -name "*.sarif" -print || true
 
       # --------------------------
-      # DEPLOY (push only). Deploy no debe caer por escáneres.
+      # DEPLOY solo en PUSH (no PR)
       # --------------------------
-      - name: Azure Login (OIDC)
-        if: github.event_name == 'push' && (github.ref_name == 'develop' || github.ref_name == 'main')
-        uses: azure/login@v2
-        with:
-          client-id: ${{ secrets.AZURE_CLIENT_ID }}
-          tenant-id: ${{ secrets.AZURE_TENANT_ID }}
-          subscription-id: ${{ secrets.AZURE_SUBSCRIPTION_ID }}
-
       - name: ACR login
         if: github.event_name == 'push' && (github.ref_name == 'develop' || github.ref_name == 'main')
         run: az acr login --name ${{ vars.ACR_NAME }}
