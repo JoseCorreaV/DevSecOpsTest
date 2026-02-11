@@ -3,16 +3,38 @@ data "azurerm_client_config" "current" {}
 # Roles para que la UAMI pueda:
 # - PULL en ACR
 # - Leer secretos en KeyVault
+#
+# IMPORTANTE:
+# Azure identifica un Role Assignment por su "name" (GUID).
+# Si Terraform genera un GUID diferente, Azure responde 409 RoleAssignmentExists.
+# Por eso usamos uuidv5 determinístico.
+
 resource "azurerm_role_assignment" "acr_pull" {
   scope                = var.acr_id
   role_definition_name = "AcrPull"
   principal_id         = var.identity_principal_id
+
+  # GUID estable (evita 409 RoleAssignmentExists)
+  name = uuidv5(
+    "6ba7b811-9dad-11d1-80b4-00c04fd430c8",
+    "${var.acr_id}|AcrPull|${var.identity_principal_id}"
+  )
+
+  skip_service_principal_aad_check = true
 }
 
 resource "azurerm_role_assignment" "kv_secrets_user" {
   scope                = var.keyvault_id
   role_definition_name = "Key Vault Secrets User"
   principal_id         = var.identity_principal_id
+
+  # GUID estable (evita 409 RoleAssignmentExists)
+  name = uuidv5(
+    "6ba7b811-9dad-11d1-80b4-00c04fd430c8",
+    "${var.keyvault_id}|Key Vault Secrets User|${var.identity_principal_id}"
+  )
+
+  skip_service_principal_aad_check = true
 }
 
 resource "azapi_resource" "job" {
