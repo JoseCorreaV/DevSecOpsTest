@@ -1,16 +1,18 @@
 data "azurerm_client_config" "current" {}
 
+# Roles para que la UAMI pueda:
+# - PULL en ACR
+# - Leer secretos en KeyVault
 resource "azurerm_role_assignment" "acr_pull" {
   scope                = var.acr_id
   role_definition_name = "AcrPull"
   principal_id         = var.identity_principal_id
 
+  # GUID estable: evita 409 RoleAssignmentExists (si el state es consistente)
   name = uuidv5(
     "6ba7b811-9dad-11d1-80b4-00c04fd430c8",
     "${var.acr_id}|AcrPull|${var.identity_principal_id}"
   )
-
-  skip_service_principal_aad_check = true
 }
 
 resource "azurerm_role_assignment" "kv_secrets_user" {
@@ -18,6 +20,7 @@ resource "azurerm_role_assignment" "kv_secrets_user" {
   role_definition_name = "Key Vault Secrets User"
   principal_id         = var.identity_principal_id
 
+  # GUID estable: evita 409 RoleAssignmentExists (si el state es consistente)
   name = uuidv5(
     "6ba7b811-9dad-11d1-80b4-00c04fd430c8",
     "${var.keyvault_id}|Key Vault Secrets User|${var.identity_principal_id}"
@@ -28,9 +31,13 @@ resource "azurerm_role_assignment" "kv_secrets_user" {
 
 resource "azapi_resource" "api" {
   type      = "Microsoft.App/containerApps@2023-05-01"
-  name      = "${var.prefix}-api"
+  name      = "${var.prefix}api"
   location  = var.location
   parent_id = "/subscriptions/${data.azurerm_client_config.current.subscription_id}/resourceGroups/${var.resource_group_name}"
+
+  # Container Apps a veces cambian schema: mejor sin validación estricta
+  ignore_missing_property     = true
+  schema_validation_enabled   = false
 
   identity {
     type         = "UserAssigned"
@@ -45,7 +52,13 @@ resource "azapi_resource" "api" {
         ingress = {
           external   = true
           targetPort = 8080
-          transport  = "auto"
+
+          traffic = [
+            {
+              latestRevision = true
+              weight         = 100
+            }
+          ]
         }
 
         registries = [
@@ -65,19 +78,6 @@ resource "azapi_resource" "api" {
       }
 
       template = {
-        initContainers = [
-          {
-            name    = "init"
-            image   = "alpine:3.20"
-            command = ["sh", "-c"]
-            args    = ["echo \"Iniciando...\" && sleep 5"]
-            resources = {
-              cpu    = 0.25
-              memory = "0.5Gi"
-            }
-          }
-        ]
-
         containers = [
           {
             name  = "api"
@@ -91,16 +91,11 @@ resource "azapi_resource" "api" {
             ]
 
             resources = {
-              cpu    = 0.5
-              memory = "1Gi"
+              cpu    = 0.25
+              memory = "0.5Gi"
             }
           }
         ]
-
-        scale = {
-          minReplicas = 1
-          maxReplicas = 1
-        }
       }
     }
   }
