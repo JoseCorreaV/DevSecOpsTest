@@ -61,18 +61,18 @@ module "api" {
   location            = var.location
   resource_group_name = var.resource_group_name
 
-  environment_id       = module.cae.environment_id
-  acr_id               = module.acr.acr_id
-  acr_login_server     = module.acr.login_server
+  environment_id   = module.cae.environment_id
+  acr_id           = module.acr.acr_id
+  acr_login_server = module.acr.login_server
 
-  identity_id          = module.identity.id
+  identity_id           = module.identity.id
   identity_principal_id = module.identity.principal_id
 
-  keyvault_id          = module.keyvault.key_vault_id
-  keyvault_secret_id   = module.keyvault.secret_versionless_id
+  keyvault_id        = module.keyvault.key_vault_id
+  keyvault_secret_id = module.keyvault.secret_versionless_id
 
-  app_image_name       = var.app_image_name
-  app_image_tag        = var.app_image_tag
+  app_image_name = var.app_image_name
+  app_image_tag  = var.app_image_tag
 }
 
 module "job" {
@@ -81,16 +81,16 @@ module "job" {
   location            = var.location
   resource_group_name = var.resource_group_name
 
-  environment_id       = module.cae.environment_id
-  acr_id               = module.acr.acr_id
-  acr_login_server     = module.acr.login_server
+  environment_id   = module.cae.environment_id
+  acr_id           = module.acr.acr_id
+  acr_login_server = module.acr.login_server
 
-  identity_id          = module.identity.id
+  identity_id           = module.identity.id
   identity_principal_id = module.identity.principal_id
 
-  keyvault_id          = module.keyvault.key_vault_id
-  keyvault_secret_id   = module.keyvault.secret_versionless_id
+  keyvault_id        = module.keyvault.key_vault_id
+  keyvault_secret_id = module.keyvault.secret_versionless_id
 
-  job_image_name       = var.job_image_name
-  job_image_tag        = var.job_image_tag
+  job_image_name = var.job_image_name
+  job_image_tag  = var.job_image_tag
 }
