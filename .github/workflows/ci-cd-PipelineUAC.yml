@@ -35,6 +35,7 @@ jobs:
           tenant-id: ${{ secrets.AZURE_TENANT_ID }}
           subscription-id: ${{ secrets.AZURE_SUBSCRIPTION_ID }}
 
+      # Se usa para el módulo keyvault (roles estables por lista)
       - name: Set TF_VAR_keyvault_secrets_officer_principal_ids
         shell: bash
         run: |
@@ -43,13 +44,9 @@ jobs:
           echo "TF_VAR_keyvault_secrets_officer_principal_ids=[\"$SP_OBJECT_ID\"]" >> "$GITHUB_ENV"
           echo "SP_OBJECT_ID=$SP_OBJECT_ID"
 
-
       - name: Setup Terraform
         uses: hashicorp/setup-terraform@v3
 
-      # State key seguro:
-      # PR -> pr-<num>.tfstate
-      # push -> develop.tfstate / main.tfstate
       - name: Set TFSTATE key
         shell: bash
         run: |
@@ -83,8 +80,8 @@ jobs:
         working-directory: ${{ env.TF_DIR }}
         run: terraform validate
 
-      # PR: plan sin lock para no pelear por el state
-      - name: Terraform plan (PR, no lock)
+      # PR: plan sin lock y SIN refresh (evita 403 por KeyVault en refresh)
+      - name: Terraform plan (PR)
         if: github.event_name == 'pull_request'
         working-directory: ${{ env.TF_DIR }}
         env:
@@ -95,8 +92,20 @@ jobs:
           ARM_SUBSCRIPTION_ID: ${{ secrets.AZURE_SUBSCRIPTION_ID }}
         run: terraform plan -no-color -lock=false -refresh=false
 
+      # PUSH develop/main: plan sin refresh (opcional, pero útil)
+      - name: Terraform plan (PUSH)
+        if: github.event_name == 'push' && (github.ref_name == 'develop' || github.ref_name == 'main')
+        working-directory: ${{ env.TF_DIR }}
+        env:
+          TF_VAR_my_secret_value: ${{ secrets.MY_SECRET_VALUE }}
+          ARM_USE_OIDC: true
+          ARM_CLIENT_ID: ${{ secrets.AZURE_CLIENT_ID }}
+          ARM_TENANT_ID: ${{ secrets.AZURE_TENANT_ID }}
+          ARM_SUBSCRIPTION_ID: ${{ secrets.AZURE_SUBSCRIPTION_ID }}
+        run: terraform plan -no-color -lock-timeout=5m -refresh=false
+
       # -------------------------
-      # Checkov -> SARIF
+      # Checkov -> SARIF (IaC)
       # -------------------------
       - name: IaC scan (Checkov)
         continue-on-error: true
@@ -108,13 +117,6 @@ jobs:
           output_file_path: checkov.sarif
           skip_check: "CKV_AZURE_166,CKV_AZURE_139,CKV_AZURE_233,CKV_AZURE_163,CKV_AZURE_167,CKV_AZURE_164,CKV_AZURE_237,CKV_AZURE_165,CKV_AZURE_189,CKV_AZURE_109,CKV2_AZURE_32"
 
-      - name: Upload Checkov SARIF (if exists)
-        if: always()
-        continue-on-error: true
-        shell: bash
-        run: |
-          [ -f "checkov.sarif" ] && echo "checkov.sarif ok" || exit 0
-
       - name: Upload Checkov SARIF
         if: always()
         continue-on-error: true
@@ -123,18 +125,18 @@ jobs:
           sarif_file: checkov.sarif
 
       # -------------------------
-      # Docker build
+      # Docker build + Trivy (solo develop/main)
       # -------------------------
       - name: Docker build (api)
+        if: github.event_name == 'push' && (github.ref_name == 'develop' || github.ref_name == 'main')
         run: docker build -t $APP_IMAGE_NAME:${{ github.sha }} ./app
 
       - name: Docker build (job)
+        if: github.event_name == 'push' && (github.ref_name == 'develop' || github.ref_name == 'main')
         run: docker build -t $JOB_IMAGE_NAME:${{ github.sha }} ./job
 
-      # -------------------------
-      # Trivy -> SARIF
-      # -------------------------
       - name: Trivy scan (api)
+        if: github.event_name == 'push' && (github.ref_name == 'develop' || github.ref_name == 'main')
         continue-on-error: true
         uses: aquasecurity/trivy-action@0.24.0
         with:
@@ -146,13 +148,6 @@ jobs:
           severity: CRITICAL,HIGH
           exit-code: "0"
 
-      - name: Upload Trivy SARIF (api) if exists
-        if: always()
-        continue-on-error: true
-        shell: bash
-        run: |
-          [ -f "trivy-api.sarif" ] && echo "trivy-api ok" || exit 0
-
       - name: Upload Trivy SARIF (api)
         if: always()
         continue-on-error: true
@@ -161,6 +156,7 @@ jobs:
           sarif_file: trivy-api.sarif
 
       - name: Trivy scan (job)
+        if: github.event_name == 'push' && (github.ref_name == 'develop' || github.ref_name == 'main')
         continue-on-error: true
         uses: aquasecurity/trivy-action@0.24.0
         with:
@@ -171,13 +167,6 @@ jobs:
           vuln-type: os,library
           severity: CRITICAL,HIGH
           exit-code: "0"
-
-      - name: Upload Trivy SARIF (job) if exists
-        if: always()
-        continue-on-error: true
-        shell: bash
-        run: |
-          [ -f "trivy-job.sarif" ] && echo "trivy-job ok" || exit 0
 
       - name: Upload Trivy SARIF (job)
         if: always()
@@ -205,17 +194,6 @@ jobs:
 
           docker tag $JOB_IMAGE_NAME:${{ github.sha }} $ACR_LOGIN_SERVER/$JOB_IMAGE_NAME:${{ github.sha }}
           docker push $ACR_LOGIN_SERVER/$JOB_IMAGE_NAME:${{ github.sha }}
-
-      - name: Terraform plan (PUSH)
-        if: github.event_name == 'push' && (github.ref_name == 'develop' || github.ref_name == 'main')
-        working-directory: ${{ env.TF_DIR }}
-        env:
-          TF_VAR_my_secret_value: ${{ secrets.MY_SECRET_VALUE }}
-          ARM_USE_OIDC: true
-          ARM_CLIENT_ID: ${{ secrets.AZURE_CLIENT_ID }}
-          ARM_TENANT_ID: ${{ secrets.AZURE_TENANT_ID }}
-          ARM_SUBSCRIPTION_ID: ${{ secrets.AZURE_SUBSCRIPTION_ID }}
-        run: terraform plan -no-color -lock-timeout=5m -refresh=false
 
       - name: Terraform apply (PUSH)
         if: github.event_name == 'push' && (github.ref_name == 'develop' || github.ref_name == 'main')
