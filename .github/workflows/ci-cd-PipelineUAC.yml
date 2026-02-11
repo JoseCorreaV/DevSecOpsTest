@@ -5,9 +5,9 @@ on:
     branches:
       - develop
       - main
-      - "feature/**"
   pull_request:
     branches: [develop, main]
+  workflow_dispatch: {}
 
 concurrency:
   group: ci-${{ github.workflow }}-${{ github.ref }}
@@ -28,36 +28,18 @@ jobs:
     runs-on: ubuntu-latest
 
     steps:
-      - name: Checkout
-        uses: actions/checkout@v4
+      - uses: actions/checkout@v4
 
-      - name: Debug context
-        shell: bash
-        run: |
-          echo "event_name=${{ github.event_name }}"
-          echo "ref=${{ github.ref }}"
-          echo "ref_name=${{ github.ref_name }}"
-          echo "sha=${{ github.sha }}"
-          if [ "${{ github.event_name }}" = "pull_request" ]; then
-            echo "pr_number=${{ github.event.pull_request.number }}"
-            echo "pr_base=${{ github.event.pull_request.base.ref }}"
-            echo "pr_head=${{ github.event.pull_request.head.ref }}"
-          fi
-
-      - name: Azure Login (OIDC)
-        uses: azure/login@v2
+      - uses: azure/login@v2
         with:
           client-id: ${{ secrets.AZURE_CLIENT_ID }}
           tenant-id: ${{ secrets.AZURE_TENANT_ID }}
           subscription-id: ${{ secrets.AZURE_SUBSCRIPTION_ID }}
 
-      - name: Setup Terraform
-        uses: hashicorp/setup-terraform@v3
+      - uses: hashicorp/setup-terraform@v3
         with:
           terraform_wrapper: false
 
-      # PR -> pr-<num>.tfstate
-      # push -> <branch>.tfstate
       - name: Set TFSTATE key
         shell: bash
         run: |
@@ -68,13 +50,12 @@ jobs:
             TFSTATE_KEY="${{ github.ref_name }}.tfstate"
           fi
           echo "TFSTATE_KEY=$TFSTATE_KEY" >> "$GITHUB_ENV"
-          echo "TFSTATE_KEY=$TFSTATE_KEY"
 
       - name: Terraform fmt
         working-directory: ${{ env.TF_DIR }}
         run: terraform fmt -check -recursive
 
-      - name: Terraform init (remote state using Azure AD)
+      - name: Terraform init
         working-directory: ${{ env.TF_DIR }}
         run: |
           terraform init \
@@ -88,9 +69,7 @@ jobs:
         working-directory: ${{ env.TF_DIR }}
         run: terraform validate
 
-      # ✅ Plan robusto: NO falla cuando hay cambios (exit 2).
-      - name: Terraform plan (PR)
-        if: github.event_name == 'pull_request'
+      - name: Terraform plan
         working-directory: ${{ env.TF_DIR }}
         shell: bash
         env:
@@ -99,166 +78,16 @@ jobs:
           ARM_CLIENT_ID: ${{ secrets.AZURE_CLIENT_ID }}
           ARM_TENANT_ID: ${{ secrets.AZURE_TENANT_ID }}
           ARM_SUBSCRIPTION_ID: ${{ secrets.AZURE_SUBSCRIPTION_ID }}
-        run: |
-          set +e
-          terraform plan -detailed-exitcode -no-color -lock=false -refresh=false -out=tfplan
-          code=$?
-          set -e
-          if [ $code -eq 1 ]; then
-            echo "terraform plan failed"
-            exit 1
-          fi
-          echo "terraform plan exit code: $code (0=no changes, 2=changes)"
-          exit 0
-
-      - name: Terraform plan (push any branch)
-        if: github.event_name == 'push'
-        working-directory: ${{ env.TF_DIR }}
-        shell: bash
-        env:
-          TF_VAR_my_secret_value: ${{ secrets.MY_SECRET_VALUE }}
-          ARM_USE_OIDC: true
-          ARM_CLIENT_ID: ${{ secrets.AZURE_CLIENT_ID }}
-          ARM_TENANT_ID: ${{ secrets.AZURE_TENANT_ID }}
-          ARM_SUBSCRIPTION_ID: ${{ secrets.AZURE_SUBSCRIPTION_ID }}
-        run: |
-          set +e
-          terraform plan -detailed-exitcode -no-color -lock-timeout=5m -refresh=false -out=tfplan
-          code=$?
-          set -e
-          if [ $code -eq 1 ]; then
-            echo "terraform plan failed"
-            exit 1
-          fi
-          echo "terraform plan exit code: $code (0=no changes, 2=changes)"
-          exit 0
-
-      - name: IaC scan (Checkov)
-        continue-on-error: true
-        uses: bridgecrewio/checkov-action@v12
-        with:
-          directory: ${{ env.TF_DIR }}
-          quiet: true
-          output_format: sarif
-          output_file_path: checkov.sarif
-          skip_check: "CKV_AZURE_166,CKV_AZURE_139,CKV_AZURE_233,CKV_AZURE_163,CKV_AZURE_167,CKV_AZURE_164,CKV_AZURE_237,CKV_AZURE_165,CKV_AZURE_189,CKV_AZURE_109,CKV2_AZURE_32"
-
-      - name: Upload Checkov SARIF
-        if: always()
-        continue-on-error: true
-        uses: github/codeql-action/upload-sarif@v3
-        with:
-          sarif_file: checkov.sarif
-
-      - name: Docker build (api)
-        run: docker build -t ${{ env.APP_IMAGE_NAME }}:${{ github.sha }} ./app
-
-      - name: Docker build (job)
-        run: docker build -t ${{ env.JOB_IMAGE_NAME }}:${{ github.sha }} ./job
-
-      - name: Trivy scan (api)
-        continue-on-error: true
-        uses: aquasecurity/trivy-action@0.24.0
-        with:
-          image-ref: ${{ env.APP_IMAGE_NAME }}:${{ github.sha }}
-          scan-type: image
-          format: sarif
-          output: trivy-api.sarif
-          vuln-type: os,library
-          severity: CRITICAL,HIGH
-          exit-code: "0"
-
-      - name: Upload Trivy SARIF (api)
-        if: always()
-        continue-on-error: true
-        uses: github/codeql-action/upload-sarif@v3
-        with:
-          sarif_file: trivy-api.sarif
-
-      - name: Trivy scan (job)
-        continue-on-error: true
-        uses: aquasecurity/trivy-action@0.24.0
-        with:
-          image-ref: ${{ env.JOB_IMAGE_NAME }}:${{ github.sha }}
-          scan-type: image
-          format: sarif
-          output: trivy-job.sarif
-          vuln-type: os,library
-          severity: CRITICAL,HIGH
-          exit-code: "0"
-
-      - name: Upload Trivy SARIF (job)
-        if: always()
-        continue-on-error: true
-        uses: github/codeql-action/upload-sarif@v3
-        with:
-          sarif_file: trivy-job.sarif
-
-      # DEPLOY SOLO EN develop/main (push)
-      - name: ACR login
-        if: github.event_name == 'push' && (github.ref_name == 'develop' || github.ref_name == 'main')
-        run: az acr login --name ${{ vars.ACR_NAME }}
-
-      - name: Tag & Push images to ACR
-        if: github.event_name == 'push' && (github.ref_name == 'develop' || github.ref_name == 'main')
-        shell: bash
         run: |
           set -euo pipefail
-          ACR_LOGIN_SERVER=$(az acr show -n "${{ vars.ACR_NAME }}" --query loginServer -o tsv)
-          docker tag ${{ env.APP_IMAGE_NAME }}:${{ github.sha }} $ACR_LOGIN_SERVER/${{ env.APP_IMAGE_NAME }}:${{ github.sha }}
-          docker push $ACR_LOGIN_SERVER/${{ env.APP_IMAGE_NAME }}:${{ github.sha }}
-          docker tag ${{ env.JOB_IMAGE_NAME }}:${{ github.sha }} $ACR_LOGIN_SERVER/${{ env.JOB_IMAGE_NAME }}:${{ github.sha }}
-          docker push $ACR_LOGIN_SERVER/${{ env.JOB_IMAGE_NAME }}:${{ github.sha }}
-
-      - name: Terraform apply (foundation)
-        if: github.event_name == 'push' && (github.ref_name == 'develop' || github.ref_name == 'main')
-        working-directory: ${{ env.TF_DIR }}
-        env:
-          TF_VAR_my_secret_value: ${{ secrets.MY_SECRET_VALUE }}
-          ARM_USE_OIDC: true
-          ARM_CLIENT_ID: ${{ secrets.AZURE_CLIENT_ID }}
-          ARM_TENANT_ID: ${{ secrets.AZURE_TENANT_ID }}
-          ARM_SUBSCRIPTION_ID: ${{ secrets.AZURE_SUBSCRIPTION_ID }}
-        run: |
-          terraform apply -auto-approve -lock-timeout=5m \
-            -target=module.acr \
-            -target=module.cae \
-            -target=module.identity \
-            -target=module.keyvault.azurerm_key_vault.this
-
-      - name: Bootstrap KeyVault RBAC for pipeline SP
-        if: github.event_name == 'push' && (github.ref_name == 'develop' || github.ref_name == 'main')
-        shell: bash
-        run: |
-          set -euo pipefail
-          SP_OBJECT_ID=$(az ad sp show --id "${{ secrets.AZURE_CLIENT_ID }}" --query id -o tsv)
-          KV_ID=$(az keyvault show -n "${{ vars.KEYVAULT_NAME }}" -g "${{ vars.AZURE_RESOURCE_GROUP }}" --query id -o tsv)
-
-          az role assignment create \
-            --assignee-object-id "$SP_OBJECT_ID" \
-            --assignee-principal-type ServicePrincipal \
-            --role "Key Vault Secrets Officer" \
-            --scope "$KV_ID" >/dev/null 2>&1 || true
-
-          echo "Waiting RBAC propagation..."
-          for i in $(seq 1 30); do
-            FOUND=$(az role assignment list --assignee-object-id "$SP_OBJECT_ID" --scope "$KV_ID" --query "[?roleDefinitionName=='Key Vault Secrets Officer'] | length(@)" -o tsv)
-            if [ "$FOUND" != "0" ]; then
-              echo "RBAC ok"
-              break
-            fi
-            sleep 10
-          done
-
-      - name: Terraform apply (full)
-        if: github.event_name == 'push' && (github.ref_name == 'develop' || github.ref_name == 'main')
-        working-directory: ${{ env.TF_DIR }}
-        env:
-          TF_VAR_app_image_tag: ${{ github.sha }}
-          TF_VAR_job_image_tag: ${{ github.sha }}
-          TF_VAR_my_secret_value: ${{ secrets.MY_SECRET_VALUE }}
-          ARM_USE_OIDC: true
-          ARM_CLIENT_ID: ${{ secrets.AZURE_CLIENT_ID }}
-          ARM_TENANT_ID: ${{ secrets.AZURE_TENANT_ID }}
-          ARM_SUBSCRIPTION_ID: ${{ secrets.AZURE_SUBSCRIPTION_ID }}
-        run: terraform apply -auto-approve -lock-timeout=5m
+          set +e
+          terraform plan -detailed-exitcode -no-color -compact-warnings -out=tfplan 2>&1 | tee plan.log
+          code=${PIPESTATUS[0]}
+          set -e
+          echo "terraform plan exit code: $code"
+          if [ "$code" -eq 1 ]; then
+            echo "==== terraform plan FAILED (printing log) ===="
+            tail -n 200 plan.log
+            exit 1
+          fi
+          exit 0
