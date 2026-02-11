@@ -12,10 +12,9 @@ permissions:
   security-events: write
 
 env:
-  # Ruta correcta de Terraform en tu repo
   TF_DIR: ./infra/envs/dev
 
-  # Nombres de repos en ACR (coinciden con lo que ya tienes en ACR: techflow-api y techflow-job)
+  
   APP_IMAGE_NAME: techflow-api
   JOB_IMAGE_NAME: techflow-job
 
@@ -42,19 +41,15 @@ jobs:
         working-directory: ${{ env.TF_DIR }}
         run: terraform validate
 
-      # IaC Scan (Checkov)
-      # Nota: en laboratorio es normal que fallen checks de Private Endpoint / ACR Premium.
-      # Por eso los saltamos explícitamente para que el pipeline no bloquee.
+
       - name: IaC scan (Checkov)
         uses: bridgecrewio/checkov-action@v12
         with:
           directory: ${{ env.TF_DIR }}
           quiet: true
           output_format: sarif
-          # Quita los que te están fallando y que no aplican al laboratorio actual
-          skip_check: >-
-            CKV_AZURE_166,CKV_AZURE_139,CKV_AZURE_233,CKV_AZURE_163,CKV_AZURE_167,CKV_AZURE_164,CKV_AZURE_237,CKV_AZURE_165,
-            CKV_AZURE_189,CKV_AZURE_109,CKV2_AZURE_32
+          output_file_path: results.sarif
+          skip_check: "CKV_AZURE_166,CKV_AZURE_139,CKV_AZURE_233,CKV_AZURE_163,CKV_AZURE_167,CKV_AZURE_164,CKV_AZURE_237,CKV_AZURE_165,CKV_AZURE_189,CKV_AZURE_109,CKV2_AZURE_32"
 
       - name: Upload Checkov SARIF
         if: always()
@@ -62,7 +57,7 @@ jobs:
         with:
           sarif_file: results.sarif
 
-      # Docker build (siempre: PR y push)
+
       - name: Docker build (api)
         run: |
           docker build -t $APP_IMAGE_NAME:${{ github.sha }} ./app
@@ -71,7 +66,7 @@ jobs:
         run: |
           docker build -t $JOB_IMAGE_NAME:${{ github.sha }} ./job
 
-      # Image scan (siempre: PR y push)
+
       - name: Trivy scan (api image)
         uses: aquasecurity/trivy-action@0.24.0
         with:
