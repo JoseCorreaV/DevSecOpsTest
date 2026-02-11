@@ -2,9 +2,9 @@ name: CI-CD
 
 on:
   push:
-    branches: [develop]
+    branches: [develop, main]
   pull_request:
-    branches: [develop]
+    branches: [develop, main]
 
 permissions:
   id-token: write
@@ -12,9 +12,10 @@ permissions:
   security-events: write
 
 env:
+  # Terraform (en tu repo solo existe envs/dev)
   TF_DIR: ./infra/envs/dev
 
-  
+  # Imágenes
   APP_IMAGE_NAME: techflow-api
   JOB_IMAGE_NAME: techflow-job
 
@@ -41,7 +42,9 @@ jobs:
         working-directory: ${{ env.TF_DIR }}
         run: terraform validate
 
-
+      # -------------------------
+      # IaC Scan (Checkov) -> SARIF
+      # -------------------------
       - name: IaC scan (Checkov)
         uses: bridgecrewio/checkov-action@v12
         with:
@@ -49,6 +52,7 @@ jobs:
           quiet: true
           output_format: sarif
           output_file_path: results.sarif
+          # IMPORTANTE: en una sola línea (sin saltos) para evitar errores
           skip_check: "CKV_AZURE_166,CKV_AZURE_139,CKV_AZURE_233,CKV_AZURE_163,CKV_AZURE_167,CKV_AZURE_164,CKV_AZURE_237,CKV_AZURE_165,CKV_AZURE_189,CKV_AZURE_109,CKV2_AZURE_32"
 
       - name: Upload Checkov SARIF
@@ -57,57 +61,71 @@ jobs:
         with:
           sarif_file: results.sarif
 
-
+      # -------------------------
+      # Docker build
+      # -------------------------
       - name: Docker build (api)
-        run: |
-          docker build -t $APP_IMAGE_NAME:${{ github.sha }} ./app
+        run: docker build -t $APP_IMAGE_NAME:${{ github.sha }} ./app
 
       - name: Docker build (job)
-        run: |
-          docker build -t $JOB_IMAGE_NAME:${{ github.sha }} ./job
+        run: docker build -t $JOB_IMAGE_NAME:${{ github.sha }} ./job
 
-
-      - name: Trivy scan (report only, SARIF)
+      # -------------------------
+      # Trivy scans -> SARIF (NO rompe pipeline, pero deja evidencia)
+      # -------------------------
+      - name: Trivy scan (api image) - SARIF report
         uses: aquasecurity/trivy-action@0.24.0
         with:
           image-ref: ${{ env.APP_IMAGE_NAME }}:${{ github.sha }}
           scan-type: image
           format: sarif
-          output: trivy-results.sarif
+          output: trivy-api.sarif
           vuln-type: os,library
           severity: CRITICAL,HIGH
-          exit-code: 0
+          exit-code: "0"
 
-      - name: Upload Trivy SARIF
+      - name: Upload Trivy SARIF (api)
         if: always()
         uses: github/codeql-action/upload-sarif@v3
         with:
-          sarif_file: trivy-results.sarif
-                
+          sarif_file: trivy-api.sarif
+
+      - name: Trivy scan (job image) - SARIF report
+        uses: aquasecurity/trivy-action@0.24.0
+        with:
+          image-ref: ${{ env.JOB_IMAGE_NAME }}:${{ github.sha }}
+          scan-type: image
+          format: sarif
+          output: trivy-job.sarif
+          vuln-type: os,library
+          severity: CRITICAL,HIGH
+          exit-code: "0"
+
+      - name: Upload Trivy SARIF (job)
+        if: always()
+        uses: github/codeql-action/upload-sarif@v3
+        with:
+          sarif_file: trivy-job.sarif
 
       # --------------------------
-      # SOLO DEPLOY EN PUSH A DEVELOP
+      # DEPLOY (push a develop o main)
+      # OJO: en tu repo solo existe infra/envs/dev.
+      # Si "main" debe ser PROD, crea infra/envs/prod y cambia TF_DIR dinámicamente.
       # --------------------------
-
       - name: Azure Login (OIDC)
-        if: github.event_name != 'pull_request'
+        if: github.event_name == 'push' && (github.ref_name == 'develop' || github.ref_name == 'main')
         uses: azure/login@v2
         with:
           client-id: ${{ secrets.AZURE_CLIENT_ID }}
           tenant-id: ${{ secrets.AZURE_TENANT_ID }}
           subscription-id: ${{ secrets.AZURE_SUBSCRIPTION_ID }}
 
-      - name: Azure CLI - Show account
-        if: github.event_name != 'pull_request'
-        run: az account show
-
       - name: ACR login
-        if: github.event_name != 'pull_request'
-        run: |
-          az acr login --name ${{ vars.ACR_NAME }}
+        if: github.event_name == 'push' && (github.ref_name == 'develop' || github.ref_name == 'main')
+        run: az acr login --name ${{ vars.ACR_NAME }}
 
       - name: Tag & Push images to ACR
-        if: github.event_name != 'pull_request'
+        if: github.event_name == 'push' && (github.ref_name == 'develop' || github.ref_name == 'main')
         run: |
           ACR_LOGIN_SERVER=$(az acr show -n ${{ vars.ACR_NAME }} --query loginServer -o tsv)
 
@@ -117,8 +135,8 @@ jobs:
           docker tag $JOB_IMAGE_NAME:${{ github.sha }} $ACR_LOGIN_SERVER/$JOB_IMAGE_NAME:${{ github.sha }}
           docker push $ACR_LOGIN_SERVER/$JOB_IMAGE_NAME:${{ github.sha }}
 
-      - name: Terraform apply (deploy dev)
-        if: github.event_name != 'pull_request'
+      - name: Terraform apply
+        if: github.event_name == 'push' && (github.ref_name == 'develop' || github.ref_name == 'main')
         working-directory: ${{ env.TF_DIR }}
         env:
           TF_VAR_app_image_tag: ${{ github.sha }}
