@@ -1,14 +1,10 @@
 data "azurerm_client_config" "current" {}
 
-# Roles para que la UAMI pueda:
-# - PULL en ACR
-# - Leer secretos en KeyVault
 resource "azurerm_role_assignment" "acr_pull" {
   scope                = var.acr_id
   role_definition_name = "AcrPull"
   principal_id         = var.identity_principal_id
 
-  # GUID estable: evita 409 RoleAssignmentExists (si el state es consistente)
   name = uuidv5(
     "6ba7b811-9dad-11d1-80b4-00c04fd430c8",
     "${var.acr_id}|AcrPull|${var.identity_principal_id}"
@@ -20,7 +16,6 @@ resource "azurerm_role_assignment" "kv_secrets_user" {
   role_definition_name = "Key Vault Secrets User"
   principal_id         = var.identity_principal_id
 
-  # GUID estable: evita 409 RoleAssignmentExists (si el state es consistente)
   name = uuidv5(
     "6ba7b811-9dad-11d1-80b4-00c04fd430c8",
     "${var.keyvault_id}|Key Vault Secrets User|${var.identity_principal_id}"
@@ -35,9 +30,8 @@ resource "azapi_resource" "api" {
   location  = var.location
   parent_id = "/subscriptions/${data.azurerm_client_config.current.subscription_id}/resourceGroups/${var.resource_group_name}"
 
-  # Container Apps a veces cambian schema: mejor sin validación estricta
-  ignore_missing_property     = true
-  schema_validation_enabled   = false
+  ignore_missing_property   = true
+  schema_validation_enabled = false
 
   identity {
     type         = "UserAssigned"
@@ -52,12 +46,8 @@ resource "azapi_resource" "api" {
         ingress = {
           external   = true
           targetPort = 8080
-
           traffic = [
-            {
-              latestRevision = true
-              weight         = 100
-            }
+            { latestRevision = true, weight = 100 }
           ]
         }
 
@@ -78,6 +68,20 @@ resource "azapi_resource" "api" {
       }
 
       template = {
+        # INIT CONTAINER (cumple el requisito del doc)
+        initContainers = [
+          {
+            name  = "init"
+            image = "alpine:3.20"
+            command = ["/bin/sh"]
+            args    = ["-lc", "echo 'Iniciando...' && sleep 5"]
+            resources = {
+              cpu    = 0.1
+              memory = "0.1Gi"
+            }
+          }
+        ]
+
         containers = [
           {
             name  = "api"
