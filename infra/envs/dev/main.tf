@@ -28,11 +28,12 @@ module "acr" {
 }
 
 module "keyvault" {
-  source              = "../../modules/keyvault"
-  resource_group_name = var.resource_group_name
-  location            = var.location
-  prefix              = var.prefix
-  my_secret_value     = var.my_secret_value
+  source                        = "../../modules/keyvault"
+  resource_group_name           = var.resource_group_name
+  location                      = var.location
+  prefix                        = var.prefix
+  secrets_officer_principal_ids = var.keyvault_secrets_officer_principal_ids
+  my_secret_value               = var.my_secret_value
 }
 
 module "cae" {
@@ -84,10 +85,8 @@ module "job" {
   job_image_name = "techflow-job"
   job_image_tag  = var.job_image_tag
 
-  trigger_type = "Manual"
-  # Si lo quisieras en cron:
-  # trigger_type = "Schedule"
-  # cron_expression = "*/10 * * * *"
+  keyvault_id        = module.keyvault.key_vault_id
+  keyvault_secret_id = module.keyvault.secret_id
 
   identity_id           = module.identity.id
   identity_principal_id = module.identity.principal_id
