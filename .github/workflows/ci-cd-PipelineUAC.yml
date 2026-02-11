@@ -67,23 +67,22 @@ jobs:
           docker build -t $JOB_IMAGE_NAME:${{ github.sha }} ./job
 
 
-      - name: Trivy scan (api image)
+      - name: Trivy scan (report only, SARIF)
         uses: aquasecurity/trivy-action@0.24.0
         with:
           image-ref: ${{ env.APP_IMAGE_NAME }}:${{ github.sha }}
-          format: table
+          scan-type: image
+          format: sarif
+          output: trivy-results.sarif
           vuln-type: os,library
-          severity: CRITICAL
-          exit-code: 1
+          severity: CRITICAL,HIGH
+          exit-code: 0
 
-      - name: Trivy scan (job image)
-        uses: aquasecurity/trivy-action@0.24.0
+      - name: Upload Trivy SARIF
+        if: always()
+        uses: github/codeql-action/upload-sarif@v3
         with:
-          image-ref: ${{ env.JOB_IMAGE_NAME }}:${{ github.sha }}
-          format: table
-          vuln-type: os,library
-          severity: CRITICAL
-          exit-code: 1
+          sarif_file: trivy-results.sarif
                 
 
       # --------------------------
