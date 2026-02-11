@@ -1,39 +1,50 @@
-variable "resource_group_name" {
+variable "prefix" {
   type        = string
-  description = "Nombre del Resource Group existente o a usar"
+  description = "Prefijo de recursos."
+  default     = "techflowdev-"
 }
 
 variable "location" {
   type        = string
-  description = "Azure region (ej: eastus)"
+  description = "Región de Azure."
+  default     = "eastus"
 }
 
-variable "prefix" {
+variable "resource_group_name" {
   type        = string
-  description = "Prefijo para nombres de recursos (ej: techflowdev)"
+  description = "Resource Group destino."
+  default     = "rg-techflow-dev"
 }
 
-# ✅ Evita drift/403: lista estable de Object IDs que administran secretos (RBAC) del Key Vault.
-# Debe incluir el Service Principal del pipeline (OIDC) y, si quieres ejecutar local, también tu usuario.
-variable "keyvault_secrets_officer_principal_ids" {
-  type        = list(string)
-  description = "Azure AD Object IDs con rol 'Key Vault Secrets Officer' sobre el vault."
-}
-
-variable "my_secret_value" {
+# Valores usados por los módulos de container apps / jobs
+variable "app_image_name" {
   type        = string
-  sensitive   = true
-  description = "Valor del secreto que se guardará en Key Vault (NO en código)"
+  description = "Nombre base de la imagen API."
+  default     = "techflow-api"
 }
 
+variable "job_image_name" {
+  type        = string
+  description = "Nombre base de la imagen Job."
+  default     = "techflow-job"
+}
+
+# Tags (se setean desde GitHub Actions en apply; en PR no son necesarios)
 variable "app_image_tag" {
   type        = string
-  description = "Tag de la imagen techflow-api en ACR (ej: 1.0.0)"
+  description = "Tag de imagen para la API."
   default     = "1.0.0"
 }
 
 variable "job_image_tag" {
   type        = string
-  description = "Tag de la imagen techflow-job en ACR (ej: 1.0.0)"
+  description = "Tag de imagen para el Job."
   default     = "1.0.0"
+}
+
+# Secreto del KeyVault (se inyecta por TF_VAR_my_secret_value)
+variable "my_secret_value" {
+  type        = string
+  description = "Valor del secreto 'my-secret'."
+  sensitive   = true
 }

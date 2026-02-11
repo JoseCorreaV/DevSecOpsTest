@@ -1,13 +1,20 @@
-variable "resource_group_name" { type = string }
-variable "location"            { type = string }
-variable "prefix"              { type = string }
+variable "prefix" {
+  type        = string
+  description = "Prefijo de recursos (ej: techflowdev-)."
+}
 
-variable "secrets_officer_principal_ids" {
-  type        = list(string)
-  description = "Azure AD object IDs con permisos 'Key Vault Secrets Officer' sobre el vault."
+variable "location" {
+  type        = string
+  description = "Región de Azure."
+}
+
+variable "resource_group_name" {
+  type        = string
+  description = "Resource Group donde se crean recursos."
 }
 
 variable "my_secret_value" {
-  type      = string
-  sensitive = true
+  type        = string
+  description = "Valor del secreto 'my-secret' que se guardará en KeyVault."
+  sensitive   = true
 }

@@ -1,26 +1,14 @@
 data "azurerm_client_config" "current" {}
 
-# Roles para que la UAMI pueda:
-# - PULL en ACR
-# - Leer secretos en KeyVault
-#
-# IMPORTANTE:
-# Azure identifica un Role Assignment por su "name" (GUID).
-# Si Terraform genera un GUID diferente, Azure responde 409 RoleAssignmentExists.
-# Por eso usamos uuidv5 determinístico.
-
 resource "azurerm_role_assignment" "acr_pull" {
   scope                = var.acr_id
   role_definition_name = "AcrPull"
   principal_id         = var.identity_principal_id
 
-  # GUID estable (evita 409 RoleAssignmentExists)
   name = uuidv5(
     "6ba7b811-9dad-11d1-80b4-00c04fd430c8",
     "${var.acr_id}|AcrPull|${var.identity_principal_id}"
   )
-
-  skip_service_principal_aad_check = true
 }
 
 resource "azurerm_role_assignment" "kv_secrets_user" {
@@ -28,7 +16,6 @@ resource "azurerm_role_assignment" "kv_secrets_user" {
   role_definition_name = "Key Vault Secrets User"
   principal_id         = var.identity_principal_id
 
-  # GUID estable (evita 409 RoleAssignmentExists)
   name = uuidv5(
     "6ba7b811-9dad-11d1-80b4-00c04fd430c8",
     "${var.keyvault_id}|Key Vault Secrets User|${var.identity_principal_id}"
@@ -39,11 +26,13 @@ resource "azurerm_role_assignment" "kv_secrets_user" {
 
 resource "azapi_resource" "api" {
   type      = "Microsoft.App/containerApps@2023-05-01"
-  name      = "${var.prefix}-api"
+  name      = "${var.prefix}api"
   location  = var.location
   parent_id = "/subscriptions/${data.azurerm_client_config.current.subscription_id}/resourceGroups/${var.resource_group_name}"
 
-  # ✅ AZAPI identity (NO user_assigned_identities)
+  ignore_missing_property   = true
+  schema_validation_enabled = false
+
   identity {
     type         = "UserAssigned"
     identity_ids = [var.identity_id]
@@ -57,10 +46,11 @@ resource "azapi_resource" "api" {
         ingress = {
           external   = true
           targetPort = 8080
-          transport  = "auto"
+          traffic = [
+            { latestRevision = true, weight = 100 }
+          ]
         }
 
-        # ✅ Para que Container Apps pueda autenticarse contra ACR
         registries = [
           {
             server   = var.acr_login_server
@@ -68,7 +58,6 @@ resource "azapi_resource" "api" {
           }
         ]
 
-        # ✅ Secret via KeyVault (NO en código)
         secrets = [
           {
             name        = "my-secret"
@@ -79,15 +68,16 @@ resource "azapi_resource" "api" {
       }
 
       template = {
+        # INIT CONTAINER (cumple el requisito del doc)
         initContainers = [
           {
-            name    = "init"
-            image   = "alpine:3.20"
-            command = ["sh", "-c"]
-            args    = ["echo \"Iniciando...\" && sleep 5"]
+            name  = "init"
+            image = "alpine:3.20"
+            command = ["/bin/sh"]
+            args    = ["-lc", "echo 'Iniciando...' && sleep 5"]
             resources = {
-              cpu    = 0.25
-              memory = "0.5Gi"
+              cpu    = 0.1
+              memory = "0.1Gi"
             }
           }
         ]
@@ -105,21 +95,15 @@ resource "azapi_resource" "api" {
             ]
 
             resources = {
-              cpu    = 0.5
-              memory = "1Gi"
+              cpu    = 0.25
+              memory = "0.5Gi"
             }
           }
         ]
-
-        scale = {
-          minReplicas = 1
-          maxReplicas = 1
-        }
       }
     }
   }
 
-  # Asegura que roles ya existen antes de intentar pull / kv
   depends_on = [
     azurerm_role_assignment.acr_pull,
     azurerm_role_assignment.kv_secrets_user

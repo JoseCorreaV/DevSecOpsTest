@@ -2,7 +2,10 @@ name: CI-CD
 
 on:
   push:
-    branches: [develop, main]
+    branches:
+      - develop
+      - main
+      - "feature/**"
   pull_request:
     branches: [develop, main]
 
@@ -28,6 +31,19 @@ jobs:
       - name: Checkout
         uses: actions/checkout@v4
 
+      - name: Debug context
+        shell: bash
+        run: |
+          echo "event_name=${{ github.event_name }}"
+          echo "ref=${{ github.ref }}"
+          echo "ref_name=${{ github.ref_name }}"
+          echo "sha=${{ github.sha }}"
+          if [ "${{ github.event_name }}" = "pull_request" ]; then
+            echo "pr_number=${{ github.event.pull_request.number }}"
+            echo "pr_base=${{ github.event.pull_request.base.ref }}"
+            echo "pr_head=${{ github.event.pull_request.head.ref }}"
+          fi
+
       - name: Azure Login (OIDC)
         uses: azure/login@v2
         with:
@@ -35,20 +51,11 @@ jobs:
           tenant-id: ${{ secrets.AZURE_TENANT_ID }}
           subscription-id: ${{ secrets.AZURE_SUBSCRIPTION_ID }}
 
-      # Exporta el objectId del SP como lista (lo consume el módulo keyvault)
-      - name: Set TF_VAR_keyvault_secrets_officer_principal_ids
-        shell: bash
-        run: |
-          set -euo pipefail
-          SP_OBJECT_ID=$(az ad sp show --id "${{ secrets.AZURE_CLIENT_ID }}" --query id -o tsv)
-          echo "TF_VAR_keyvault_secrets_officer_principal_ids=[\"$SP_OBJECT_ID\"]" >> "$GITHUB_ENV"
-          echo "SP_OBJECT_ID=$SP_OBJECT_ID"
-
       - name: Setup Terraform
         uses: hashicorp/setup-terraform@v3
 
       # PR -> pr-<num>.tfstate
-      # push -> develop.tfstate / main.tfstate
+      # push -> <branch>.tfstate
       - name: Set TFSTATE key
         shell: bash
         run: |
@@ -61,20 +68,12 @@ jobs:
           echo "TFSTATE_KEY=$TFSTATE_KEY" >> "$GITHUB_ENV"
           echo "TFSTATE_KEY=$TFSTATE_KEY"
 
-      # -------------------------
-      # Terraform fmt/init/validate
-      # -------------------------
       - name: Terraform fmt
         working-directory: ${{ env.TF_DIR }}
         run: terraform fmt -check -recursive
 
       - name: Terraform init (remote state using Azure AD)
         working-directory: ${{ env.TF_DIR }}
-        env:
-          ARM_USE_OIDC: true
-          ARM_CLIENT_ID: ${{ secrets.AZURE_CLIENT_ID }}
-          ARM_TENANT_ID: ${{ secrets.AZURE_TENANT_ID }}
-          ARM_SUBSCRIPTION_ID: ${{ secrets.AZURE_SUBSCRIPTION_ID }}
         run: |
           terraform init \
             -backend-config="resource_group_name=${{ vars.TFSTATE_RG }}" \
@@ -87,9 +86,6 @@ jobs:
         working-directory: ${{ env.TF_DIR }}
         run: terraform validate
 
-      # -------------------------
-      # PLAN (SIN REFRESH) -> evita 403 KeyVault en plan
-      # -------------------------
       - name: Terraform plan (PR)
         if: github.event_name == 'pull_request'
         working-directory: ${{ env.TF_DIR }}
@@ -101,8 +97,8 @@ jobs:
           ARM_SUBSCRIPTION_ID: ${{ secrets.AZURE_SUBSCRIPTION_ID }}
         run: terraform plan -no-color -lock=false -refresh=false
 
-      - name: Terraform plan (PUSH)
-        if: github.event_name == 'push' && (github.ref_name == 'develop' || github.ref_name == 'main')
+      - name: Terraform plan (push any branch)
+        if: github.event_name == 'push'
         working-directory: ${{ env.TF_DIR }}
         env:
           TF_VAR_my_secret_value: ${{ secrets.MY_SECRET_VALUE }}
@@ -112,9 +108,6 @@ jobs:
           ARM_SUBSCRIPTION_ID: ${{ secrets.AZURE_SUBSCRIPTION_ID }}
         run: terraform plan -no-color -lock-timeout=5m -refresh=false
 
-      # -------------------------
-      # Checkov -> SARIF
-      # -------------------------
       - name: IaC scan (Checkov)
         continue-on-error: true
         uses: bridgecrewio/checkov-action@v12
@@ -132,19 +125,13 @@ jobs:
         with:
           sarif_file: checkov.sarif
 
-      # -------------------------
-      # Docker build + Trivy (solo push develop/main)
-      # -------------------------
       - name: Docker build (api)
-        if: github.event_name == 'push' && (github.ref_name == 'develop' || github.ref_name == 'main')
-        run: docker build -t $APP_IMAGE_NAME:${{ github.sha }} ./app
+        run: docker build -t ${{ env.APP_IMAGE_NAME }}:${{ github.sha }} ./app
 
       - name: Docker build (job)
-        if: github.event_name == 'push' && (github.ref_name == 'develop' || github.ref_name == 'main')
-        run: docker build -t $JOB_IMAGE_NAME:${{ github.sha }} ./job
+        run: docker build -t ${{ env.JOB_IMAGE_NAME }}:${{ github.sha }} ./job
 
       - name: Trivy scan (api)
-        if: github.event_name == 'push' && (github.ref_name == 'develop' || github.ref_name == 'main')
         continue-on-error: true
         uses: aquasecurity/trivy-action@0.24.0
         with:
@@ -164,7 +151,6 @@ jobs:
           sarif_file: trivy-api.sarif
 
       - name: Trivy scan (job)
-        if: github.event_name == 'push' && (github.ref_name == 'develop' || github.ref_name == 'main')
         continue-on-error: true
         uses: aquasecurity/trivy-action@0.24.0
         with:
@@ -183,9 +169,7 @@ jobs:
         with:
           sarif_file: trivy-job.sarif
 
-      # --------------------------
-      # Deploy solo push develop/main
-      # --------------------------
+      # DEPLOY SOLO EN develop/main (push)
       - name: ACR login
         if: github.event_name == 'push' && (github.ref_name == 'develop' || github.ref_name == 'main')
         run: az acr login --name ${{ vars.ACR_NAME }}
@@ -195,15 +179,56 @@ jobs:
         shell: bash
         run: |
           set -euo pipefail
-          ACR_LOGIN_SERVER=$(az acr show -n ${{ vars.ACR_NAME }} --query loginServer -o tsv)
+          ACR_LOGIN_SERVER=$(az acr show -n "${{ vars.ACR_NAME }}" --query loginServer -o tsv)
 
-          docker tag $APP_IMAGE_NAME:${{ github.sha }} $ACR_LOGIN_SERVER/$APP_IMAGE_NAME:${{ github.sha }}
-          docker push $ACR_LOGIN_SERVER/$APP_IMAGE_NAME:${{ github.sha }}
+          docker tag ${{ env.APP_IMAGE_NAME }}:${{ github.sha }} $ACR_LOGIN_SERVER/${{ env.APP_IMAGE_NAME }}:${{ github.sha }}
+          docker push $ACR_LOGIN_SERVER/${{ env.APP_IMAGE_NAME }}:${{ github.sha }}
 
-          docker tag $JOB_IMAGE_NAME:${{ github.sha }} $ACR_LOGIN_SERVER/$JOB_IMAGE_NAME:${{ github.sha }}
-          docker push $ACR_LOGIN_SERVER/$JOB_IMAGE_NAME:${{ github.sha }}
+          docker tag ${{ env.JOB_IMAGE_NAME }}:${{ github.sha }} $ACR_LOGIN_SERVER/${{ env.JOB_IMAGE_NAME }}:${{ github.sha }}
+          docker push $ACR_LOGIN_SERVER/${{ env.JOB_IMAGE_NAME }}:${{ github.sha }}
 
-      - name: Terraform apply (PUSH)
+      - name: Terraform apply (foundation)
+        if: github.event_name == 'push' && (github.ref_name == 'develop' || github.ref_name == 'main')
+        working-directory: ${{ env.TF_DIR }}
+        env:
+          TF_VAR_my_secret_value: ${{ secrets.MY_SECRET_VALUE }}
+          ARM_USE_OIDC: true
+          ARM_CLIENT_ID: ${{ secrets.AZURE_CLIENT_ID }}
+          ARM_TENANT_ID: ${{ secrets.AZURE_TENANT_ID }}
+          ARM_SUBSCRIPTION_ID: ${{ secrets.AZURE_SUBSCRIPTION_ID }}
+        run: |
+          terraform apply -auto-approve -lock-timeout=5m \
+            -target=module.acr \
+            -target=module.cae \
+            -target=module.identity \
+            -target=module.keyvault.azurerm_key_vault.this
+
+      - name: Bootstrap KeyVault RBAC for pipeline SP
+        if: github.event_name == 'push' && (github.ref_name == 'develop' || github.ref_name == 'main')
+        shell: bash
+        run: |
+          set -euo pipefail
+
+          SP_OBJECT_ID=$(az ad sp show --id "${{ secrets.AZURE_CLIENT_ID }}" --query id -o tsv)
+          KV_ID=$(az keyvault show -n "${{ vars.KEYVAULT_NAME }}" -g "${{ vars.AZURE_RESOURCE_GROUP }}" --query id -o tsv)
+
+          az role assignment create \
+            --assignee-object-id "$SP_OBJECT_ID" \
+            --assignee-principal-type ServicePrincipal \
+            --role "Key Vault Secrets Officer" \
+            --scope "$KV_ID" >/dev/null 2>&1 || true
+
+          echo "Waiting RBAC propagation..."
+          for i in $(seq 1 30); do
+            FOUND=$(az role assignment list --assignee-object-id "$SP_OBJECT_ID" --scope "$KV_ID" --query "[?roleDefinitionName=='Key Vault Secrets Officer'] | length(@)" -o tsv)
+            if [ "$FOUND" != "0" ]; then
+              echo "RBAC ok"
+              break
+            fi
+            sleep 10
+          done
+
+      - name: Terraform apply (full)
         if: github.event_name == 'push' && (github.ref_name == 'develop' || github.ref_name == 'main')
         working-directory: ${{ env.TF_DIR }}
         env:
