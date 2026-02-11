@@ -51,16 +51,38 @@ jobs:
           fi
           echo "TFSTATE_KEY=$TFSTATE_KEY"
 
-      # ✅ BOOTSTRAP RBAC: darle permiso al OIDC SP para leer/crear secretos en KV
+
       # Esto evita el 403 en refresh del azurerm_key_vault_secret.
       - name: Bootstrap KeyVault RBAC for OIDC SP
         shell: bash
+        working-directory: ${{ env.TF_DIR }}
         run: |
-          set -e
-          SP_OBJECT_ID=$(az ad sp show --id "${{ secrets.AZURE_CLIENT_ID }}" --query id -o tsv)
-          KV_ID=$(az keyvault show -n "${{ vars.KEYVAULT_NAME }}" -g "${{ vars.AZURE_RESOURCE_GROUP }}" --query id -o tsv)
+          set -euo pipefail
 
+          # Object ID del Service Principal que autentica por OIDC (el que realmente ejecuta Terraform en GitHub Actions)
+          SP_OBJECT_ID=$(az ad sp show --id "${{ secrets.AZURE_CLIENT_ID }}" --query id -o tsv)
           echo "SP_OBJECT_ID=$SP_OBJECT_ID"
+
+          # Descubre RG y nombre del Key Vault:
+          # - Prioriza GitHub Vars si existen
+          # - Si no existen, los obtiene de terraform.tfvars y el convention name "${prefix}kv"
+          TFVARS_FILE="terraform.tfvars"
+
+          RG="${{ vars.AZURE_RESOURCE_GROUP }}"
+          if [ -z "${RG:-}" ]; then
+            RG=$(grep -E '^resource_group_name\s*=' "$TFVARS_FILE" | head -n1 | cut -d'=' -f2- | tr -d ' "' )
+          fi
+
+          KV_NAME="${{ vars.KEYVAULT_NAME }}"
+          if [ -z "${KV_NAME:-}" ]; then
+            PREFIX=$(grep -E '^prefix\s*=' "$TFVARS_FILE" | head -n1 | cut -d'=' -f2- | tr -d ' "' )
+            KV_NAME="${PREFIX}kv"
+          fi
+
+          echo "RG=$RG"
+          echo "KV_NAME=$KV_NAME"
+
+          KV_ID=$(az keyvault show -n "$KV_NAME" -g "$RG" --query id -o tsv)
           echo "KV_ID=$KV_ID"
 
           # Role para gestionar secretos (get/set/list)
@@ -70,6 +92,22 @@ jobs:
             --role "Key Vault Secrets Officer" \
             --scope "$KV_ID" \
             1>/dev/null || true
+
+          # Exporta TF var (lista JSON) para que Terraform cree role assignment estable (sin drift por identidad)
+          echo "TF_VAR_keyvault_secrets_officer_principal_ids=[\"$SP_OBJECT_ID\"]" >> "$GITHUB_ENV"
+
+          # Espera a que RBAC propague (si no, terraform plan puede fallar con 403)
+          for i in {1..18}; do
+            if az keyvault secret list --vault-name "$KV_NAME" --maxresults 1 1>/dev/null 2>&1; then
+              echo "RBAC listo."
+              exit 0
+            fi
+            echo "RBAC aún propagando... intento $i/18"
+            sleep 10
+          done
+
+          echo "RBAC no propagó a tiempo; terraform puede fallar con 403."
+          exit 1
 
       # -------------------------
       # Terraform fmt/init/validate
