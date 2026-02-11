@@ -6,7 +6,6 @@ on:
   pull_request:
     branches: [develop, main]
 
-# Evita carreras (dos runs tocando el mismo state al tiempo)
 concurrency:
   group: ci-${{ github.workflow }}-${{ github.ref }}
   cancel-in-progress: true
@@ -29,7 +28,6 @@ jobs:
       - name: Checkout
         uses: actions/checkout@v4
 
-      # Login a Azure desde el inicio (terraform backend + az cli + ACR)
       - name: Azure Login (OIDC)
         uses: azure/login@v2
         with:
@@ -40,9 +38,9 @@ jobs:
       - name: Setup Terraform
         uses: hashicorp/setup-terraform@v3
 
-      # Calcula un KEY de state seguro:
-      # - PR: pr-<numero>.tfstate (no usa "5/merge")
-      # - Push: develop.tfstate / main.tfstate
+      # State key seguro:
+      # PR -> pr-<num>.tfstate
+      # push -> develop.tfstate / main.tfstate
       - name: Set TFSTATE key
         shell: bash
         run: |
@@ -51,10 +49,30 @@ jobs:
           else
             echo "TFSTATE_KEY=${{ github.ref_name }}.tfstate" >> "$GITHUB_ENV"
           fi
-          echo "Using TFSTATE_KEY=$TFSTATE_KEY"
+          echo "TFSTATE_KEY=$TFSTATE_KEY"
+
+      # ✅ BOOTSTRAP RBAC: darle permiso al OIDC SP para leer/crear secretos en KV
+      # Esto evita el 403 en refresh del azurerm_key_vault_secret.
+      - name: Bootstrap KeyVault RBAC for OIDC SP
+        shell: bash
+        run: |
+          set -e
+          SP_OBJECT_ID=$(az ad sp show --id "${{ secrets.AZURE_CLIENT_ID }}" --query id -o tsv)
+          KV_ID=$(az keyvault show -n "${{ vars.KEYVAULT_NAME }}" -g "${{ vars.AZURE_RESOURCE_GROUP }}" --query id -o tsv)
+
+          echo "SP_OBJECT_ID=$SP_OBJECT_ID"
+          echo "KV_ID=$KV_ID"
+
+          # Role para gestionar secretos (get/set/list)
+          az role assignment create \
+            --assignee-object-id "$SP_OBJECT_ID" \
+            --assignee-principal-type ServicePrincipal \
+            --role "Key Vault Secrets Officer" \
+            --scope "$KV_ID" \
+            1>/dev/null || true
 
       # -------------------------
-      # Terraform (fmt/init/validate)
+      # Terraform fmt/init/validate
       # -------------------------
       - name: Terraform fmt
         working-directory: ${{ env.TF_DIR }}
@@ -74,7 +92,7 @@ jobs:
         working-directory: ${{ env.TF_DIR }}
         run: terraform validate
 
-      # Plan en PR sin lock (no rompe por state blob locked)
+      # PR: plan sin lock para no pelear por el state
       - name: Terraform plan (PR, no lock)
         if: github.event_name == 'pull_request'
         working-directory: ${{ env.TF_DIR }}
@@ -87,10 +105,9 @@ jobs:
         run: terraform plan -no-color -lock=false
 
       # -------------------------
-      # Checkov -> SARIF (no rompe pipeline)
+      # Checkov -> SARIF
       # -------------------------
       - name: IaC scan (Checkov)
-        id: checkov
         continue-on-error: true
         uses: bridgecrewio/checkov-action@v12
         with:
@@ -105,12 +122,7 @@ jobs:
         continue-on-error: true
         shell: bash
         run: |
-          if [ -f "checkov.sarif" ]; then
-            echo "checkov.sarif exists"
-          else
-            echo "checkov.sarif NOT found (skip upload)"
-            exit 0
-          fi
+          [ -f "checkov.sarif" ] && echo "checkov.sarif ok" || exit 0
 
       - name: Upload Checkov SARIF
         if: always()
@@ -129,10 +141,9 @@ jobs:
         run: docker build -t $JOB_IMAGE_NAME:${{ github.sha }} ./job
 
       # -------------------------
-      # Trivy -> SARIF (no bloquea, solo reporta)
+      # Trivy -> SARIF
       # -------------------------
-      - name: Trivy scan (api image) - SARIF report
-        id: trivy_api
+      - name: Trivy scan (api)
         continue-on-error: true
         uses: aquasecurity/trivy-action@0.24.0
         with:
@@ -144,17 +155,12 @@ jobs:
           severity: CRITICAL,HIGH
           exit-code: "0"
 
-      - name: Upload Trivy SARIF (api) - if exists
+      - name: Upload Trivy SARIF (api) if exists
         if: always()
         continue-on-error: true
         shell: bash
         run: |
-          if [ -f "trivy-api.sarif" ]; then
-            echo "trivy-api.sarif exists"
-          else
-            echo "trivy-api.sarif NOT found (skip upload)"
-            exit 0
-          fi
+          [ -f "trivy-api.sarif" ] && echo "trivy-api ok" || exit 0
 
       - name: Upload Trivy SARIF (api)
         if: always()
@@ -163,8 +169,7 @@ jobs:
         with:
           sarif_file: trivy-api.sarif
 
-      - name: Trivy scan (job image) - SARIF report
-        id: trivy_job
+      - name: Trivy scan (job)
         continue-on-error: true
         uses: aquasecurity/trivy-action@0.24.0
         with:
@@ -176,17 +181,12 @@ jobs:
           severity: CRITICAL,HIGH
           exit-code: "0"
 
-      - name: Upload Trivy SARIF (job) - if exists
+      - name: Upload Trivy SARIF (job) if exists
         if: always()
         continue-on-error: true
         shell: bash
         run: |
-          if [ -f "trivy-job.sarif" ]; then
-            echo "trivy-job.sarif exists"
-          else
-            echo "trivy-job.sarif NOT found (skip upload)"
-            exit 0
-          fi
+          [ -f "trivy-job.sarif" ] && echo "trivy-job ok" || exit 0
 
       - name: Upload Trivy SARIF (job)
         if: always()
@@ -195,15 +195,8 @@ jobs:
         with:
           sarif_file: trivy-job.sarif
 
-      - name: Debug - list SARIF files
-        if: always()
-        shell: bash
-        run: |
-          echo "SARIF files found:"
-          find . -maxdepth 4 -type f -name "*.sarif" -print || true
-
       # --------------------------
-      # DEPLOY solo en PUSH a develop/main
+      # Deploy solo push develop/main
       # --------------------------
       - name: ACR login
         if: github.event_name == 'push' && (github.ref_name == 'develop' || github.ref_name == 'main')
@@ -221,7 +214,6 @@ jobs:
           docker tag $JOB_IMAGE_NAME:${{ github.sha }} $ACR_LOGIN_SERVER/$JOB_IMAGE_NAME:${{ github.sha }}
           docker push $ACR_LOGIN_SERVER/$JOB_IMAGE_NAME:${{ github.sha }}
 
-      # En push hacemos plan con lock normal (protege state)
       - name: Terraform plan (PUSH)
         if: github.event_name == 'push' && (github.ref_name == 'develop' || github.ref_name == 'main')
         working-directory: ${{ env.TF_DIR }}
