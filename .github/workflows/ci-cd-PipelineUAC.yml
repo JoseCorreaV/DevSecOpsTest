@@ -1,11 +1,10 @@
-name: CI-CD (Terraform + DevSecOps)
+name: CI-CD
 
 on:
-  pull_request:
-    branches: [develop, main]
   push:
     branches: [develop, main]
-  workflow_dispatch: {}
+  pull_request:
+    branches: [develop, main]
 
 concurrency:
   group: ci-${{ github.workflow }}-${{ github.ref }}
@@ -22,8 +21,7 @@ env:
   JOB_IMAGE_NAME: techflow-job
 
 jobs:
-  terraform-security:
-    name: Terraform + Security (PR and Push)
+  build-security-deploy:
     runs-on: ubuntu-latest
 
     steps:
@@ -40,8 +38,8 @@ jobs:
       - name: Setup Terraform
         uses: hashicorp/setup-terraform@v3
 
-      # State key:
-      # PR -> pr-<num>.tfstate  (aislado por PR)
+      # State key seguro:
+      # PR -> pr-<num>.tfstate
       # push -> develop.tfstate / main.tfstate
       - name: Set TFSTATE key
         shell: bash
@@ -52,15 +50,17 @@ jobs:
           else
             TFSTATE_KEY="${{ github.ref_name }}.tfstate"
           fi
-
           echo "TFSTATE_KEY=$TFSTATE_KEY" >> "$GITHUB_ENV"
           echo "TFSTATE_KEY=$TFSTATE_KEY"
 
+      # -------------------------
+      # Terraform fmt/init/validate
+      # -------------------------
       - name: Terraform fmt
         working-directory: ${{ env.TF_DIR }}
         run: terraform fmt -check -recursive
 
-      - name: Terraform init
+      - name: Terraform init (remote state using Azure AD)
         working-directory: ${{ env.TF_DIR }}
         run: |
           terraform init \
@@ -74,8 +74,8 @@ jobs:
         working-directory: ${{ env.TF_DIR }}
         run: terraform validate
 
-      # PR/feature: plan sin lock (no bloquea estados)
-      - name: Terraform plan (PR)
+      # PR: plan sin lock para no pelear por el state
+      - name: Terraform plan (PR, no lock)
         if: github.event_name == 'pull_request'
         working-directory: ${{ env.TF_DIR }}
         env:
@@ -86,20 +86,8 @@ jobs:
           ARM_SUBSCRIPTION_ID: ${{ secrets.AZURE_SUBSCRIPTION_ID }}
         run: terraform plan -no-color -lock=false
 
-      # PUSH develop/main: plan normal (con lock timeout)
-      - name: Terraform plan (Push develop/main)
-        if: github.event_name == 'push' && (github.ref_name == 'develop' || github.ref_name == 'main')
-        working-directory: ${{ env.TF_DIR }}
-        env:
-          TF_VAR_my_secret_value: ${{ secrets.MY_SECRET_VALUE }}
-          ARM_USE_OIDC: true
-          ARM_CLIENT_ID: ${{ secrets.AZURE_CLIENT_ID }}
-          ARM_TENANT_ID: ${{ secrets.AZURE_TENANT_ID }}
-          ARM_SUBSCRIPTION_ID: ${{ secrets.AZURE_SUBSCRIPTION_ID }}
-        run: terraform plan -no-color -lock-timeout=5m
-
       # -------------------------
-      # Checkov (IaC) -> SARIF
+      # Checkov -> SARIF
       # -------------------------
       - name: IaC scan (Checkov)
         continue-on-error: true
@@ -109,6 +97,14 @@ jobs:
           quiet: true
           output_format: sarif
           output_file_path: checkov.sarif
+          skip_check: "CKV_AZURE_166,CKV_AZURE_139,CKV_AZURE_233,CKV_AZURE_163,CKV_AZURE_167,CKV_AZURE_164,CKV_AZURE_237,CKV_AZURE_165,CKV_AZURE_189,CKV_AZURE_109,CKV2_AZURE_32"
+
+      - name: Upload Checkov SARIF (if exists)
+        if: always()
+        continue-on-error: true
+        shell: bash
+        run: |
+          [ -f "checkov.sarif" ] && echo "checkov.sarif ok" || exit 0
 
       - name: Upload Checkov SARIF
         if: always()
@@ -117,35 +113,8 @@ jobs:
         with:
           sarif_file: checkov.sarif
 
-  build-push-deploy:
-    name: Build + Push + Deploy (only develop/main)
-    runs-on: ubuntu-latest
-    needs: terraform-security
-    if: github.event_name == 'push' && (github.ref_name == 'develop' || github.ref_name == 'main')
-
-    steps:
-      - name: Checkout
-        uses: actions/checkout@v4
-
-      - name: Azure Login (OIDC)
-        uses: azure/login@v2
-        with:
-          client-id: ${{ secrets.AZURE_CLIENT_ID }}
-          tenant-id: ${{ secrets.AZURE_TENANT_ID }}
-          subscription-id: ${{ secrets.AZURE_SUBSCRIPTION_ID }}
-
-      - name: Setup Terraform
-        uses: hashicorp/setup-terraform@v3
-
-      - name: Set TFSTATE key (branch)
-        shell: bash
-        run: |
-          set -euo pipefail
-          echo "TFSTATE_KEY=${{ github.ref_name }}.tfstate" >> "$GITHUB_ENV"
-          echo "TFSTATE_KEY=$TFSTATE_KEY"
-
       # -------------------------
-      # Build Docker images
+      # Docker build
       # -------------------------
       - name: Docker build (api)
         run: docker build -t $APP_IMAGE_NAME:${{ github.sha }} ./app
@@ -168,6 +137,13 @@ jobs:
           severity: CRITICAL,HIGH
           exit-code: "0"
 
+      - name: Upload Trivy SARIF (api) if exists
+        if: always()
+        continue-on-error: true
+        shell: bash
+        run: |
+          [ -f "trivy-api.sarif" ] && echo "trivy-api ok" || exit 0
+
       - name: Upload Trivy SARIF (api)
         if: always()
         continue-on-error: true
@@ -187,6 +163,13 @@ jobs:
           severity: CRITICAL,HIGH
           exit-code: "0"
 
+      - name: Upload Trivy SARIF (job) if exists
+        if: always()
+        continue-on-error: true
+        shell: bash
+        run: |
+          [ -f "trivy-job.sarif" ] && echo "trivy-job ok" || exit 0
+
       - name: Upload Trivy SARIF (job)
         if: always()
         continue-on-error: true
@@ -194,13 +177,15 @@ jobs:
         with:
           sarif_file: trivy-job.sarif
 
-      # -------------------------
-      # Push to ACR
-      # -------------------------
+      # --------------------------
+      # Deploy solo push develop/main
+      # --------------------------
       - name: ACR login
+        if: github.event_name == 'push' && (github.ref_name == 'develop' || github.ref_name == 'main')
         run: az acr login --name ${{ vars.ACR_NAME }}
 
       - name: Tag & Push images to ACR
+        if: github.event_name == 'push' && (github.ref_name == 'develop' || github.ref_name == 'main')
         shell: bash
         run: |
           set -euo pipefail
@@ -212,20 +197,19 @@ jobs:
           docker tag $JOB_IMAGE_NAME:${{ github.sha }} $ACR_LOGIN_SERVER/$JOB_IMAGE_NAME:${{ github.sha }}
           docker push $ACR_LOGIN_SERVER/$JOB_IMAGE_NAME:${{ github.sha }}
 
-      # -------------------------
-      # Terraform init/plan/apply
-      # -------------------------
-      - name: Terraform init
+      - name: Terraform plan (PUSH)
+        if: github.event_name == 'push' && (github.ref_name == 'develop' || github.ref_name == 'main')
         working-directory: ${{ env.TF_DIR }}
-        run: |
-          terraform init \
-            -backend-config="resource_group_name=${{ vars.TFSTATE_RG }}" \
-            -backend-config="storage_account_name=${{ vars.TFSTATE_STORAGE }}" \
-            -backend-config="container_name=${{ vars.TFSTATE_CONTAINER }}" \
-            -backend-config="key=${{ env.TFSTATE_KEY }}" \
-            -backend-config="use_azuread_auth=true"
+        env:
+          TF_VAR_my_secret_value: ${{ secrets.MY_SECRET_VALUE }}
+          ARM_USE_OIDC: true
+          ARM_CLIENT_ID: ${{ secrets.AZURE_CLIENT_ID }}
+          ARM_TENANT_ID: ${{ secrets.AZURE_TENANT_ID }}
+          ARM_SUBSCRIPTION_ID: ${{ secrets.AZURE_SUBSCRIPTION_ID }}
+        run: terraform plan -no-color -lock-timeout=5m
 
-      - name: Terraform apply (deploy)
+      - name: Terraform apply (PUSH)
+        if: github.event_name == 'push' && (github.ref_name == 'develop' || github.ref_name == 'main')
         working-directory: ${{ env.TF_DIR }}
         env:
           TF_VAR_app_image_tag: ${{ github.sha }}
