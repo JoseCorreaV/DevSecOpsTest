@@ -27,3 +27,14 @@ variable "identity_id" {
 variable "identity_principal_id" {
   type = string
 }
+
+
+variable "keyvault_id" {
+  type        = string
+  description = "Resource ID del Key Vault"
+}
+
+variable "keyvault_secret_id" {
+  type        = string
+  description = "ID/URL del secreto en Key Vault (secret id)"
+}

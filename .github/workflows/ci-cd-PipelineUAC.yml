@@ -35,6 +35,15 @@ jobs:
           tenant-id: ${{ secrets.AZURE_TENANT_ID }}
           subscription-id: ${{ secrets.AZURE_SUBSCRIPTION_ID }}
 
+      - name: Set TF_VAR_keyvault_secrets_officer_principal_ids
+        shell: bash
+        run: |
+          set -euo pipefail
+          SP_OBJECT_ID=$(az ad sp show --id "${{ secrets.AZURE_CLIENT_ID }}" --query id -o tsv)
+          echo "TF_VAR_keyvault_secrets_officer_principal_ids=[\"$SP_OBJECT_ID\"]" >> "$GITHUB_ENV"
+          echo "SP_OBJECT_ID=$SP_OBJECT_ID"
+
+
       - name: Setup Terraform
         uses: hashicorp/setup-terraform@v3
 
@@ -44,32 +53,14 @@ jobs:
       - name: Set TFSTATE key
         shell: bash
         run: |
+          set -euo pipefail
           if [ "${{ github.event_name }}" = "pull_request" ]; then
-            echo "TFSTATE_KEY=pr-${{ github.event.pull_request.number }}.tfstate" >> "$GITHUB_ENV"
+            TFSTATE_KEY="pr-${{ github.event.pull_request.number }}.tfstate"
           else
-            echo "TFSTATE_KEY=${{ github.ref_name }}.tfstate" >> "$GITHUB_ENV"
+            TFSTATE_KEY="${{ github.ref_name }}.tfstate"
           fi
+          echo "TFSTATE_KEY=$TFSTATE_KEY" >> "$GITHUB_ENV"
           echo "TFSTATE_KEY=$TFSTATE_KEY"
-
-      # ✅ BOOTSTRAP RBAC: darle permiso al OIDC SP para leer/crear secretos en KV
-      # Esto evita el 403 en refresh del azurerm_key_vault_secret.
-      - name: Bootstrap KeyVault RBAC for OIDC SP
-        shell: bash
-        run: |
-          set -e
-          SP_OBJECT_ID=$(az ad sp show --id "${{ secrets.AZURE_CLIENT_ID }}" --query id -o tsv)
-          KV_ID=$(az keyvault show -n "${{ vars.KEYVAULT_NAME }}" -g "${{ vars.AZURE_RESOURCE_GROUP }}" --query id -o tsv)
-
-          echo "SP_OBJECT_ID=$SP_OBJECT_ID"
-          echo "KV_ID=$KV_ID"
-
-          # Role para gestionar secretos (get/set/list)
-          az role assignment create \
-            --assignee-object-id "$SP_OBJECT_ID" \
-            --assignee-principal-type ServicePrincipal \
-            --role "Key Vault Secrets Officer" \
-            --scope "$KV_ID" \
-            1>/dev/null || true
 
       # -------------------------
       # Terraform fmt/init/validate
@@ -206,6 +197,7 @@ jobs:
         if: github.event_name == 'push' && (github.ref_name == 'develop' || github.ref_name == 'main')
         shell: bash
         run: |
+          set -euo pipefail
           ACR_LOGIN_SERVER=$(az acr show -n ${{ vars.ACR_NAME }} --query loginServer -o tsv)
 
           docker tag $APP_IMAGE_NAME:${{ github.sha }} $ACR_LOGIN_SERVER/$APP_IMAGE_NAME:${{ github.sha }}

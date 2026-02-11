@@ -8,6 +8,7 @@ resource "azurerm_key_vault" "this" {
 
   sku_name = "standard"
 
+  #  Usamos RBAC (recomendado). Los permisos a secretos se otorgan por role assignments.
   rbac_authorization_enabled = true
 
   # Checkov: recoverable + purge protection
@@ -18,11 +19,14 @@ resource "azurerm_key_vault" "this" {
   public_network_access_enabled = true
 }
 
-# Permite que quien ejecuta Terraform (tu usuario) cree/lea secretos.
-resource "azurerm_role_assignment" "secrets_officer_current" {
+# ✅ NO dependas de "quien ejecuta terraform" (data.azurerm_client_config.current.object_id),
+# porque en GitHub Actions el principal cambia (OIDC SP) y te fuerza reemplazos + 403 al leer secretos.
+# En su lugar, pasa una lista estable de principal IDs (SP del pipeline, tu usuario, etc.).
+resource "azurerm_role_assignment" "secrets_officer" {
+  for_each             = toset(var.secrets_officer_principal_ids)
   scope                = azurerm_key_vault.this.id
   role_definition_name = "Key Vault Secrets Officer"
-  principal_id         = data.azurerm_client_config.current.object_id
+  principal_id         = each.value
 }
 
 resource "azurerm_key_vault_secret" "my_secret" {
@@ -32,7 +36,8 @@ resource "azurerm_key_vault_secret" "my_secret" {
 
   # Checkov: content_type + expiration
   content_type    = "text/plain"
-  expiration_date = timeadd(timestamp(), "8760h") # +1 año
+  expiration_date = timeadd(timestamp(), "8760h")
 
-  depends_on = [azurerm_role_assignment.secrets_officer_current]
+  # Asegura que el rol exista antes de crear/leer el secreto (evita carreras en apply).
+  depends_on = [azurerm_role_assignment.secrets_officer]
 }

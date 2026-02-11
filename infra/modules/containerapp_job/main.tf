@@ -1,8 +1,17 @@
 data "azurerm_client_config" "current" {}
 
+# Roles para que la UAMI pueda:
+# - PULL en ACR
+# - Leer secretos en KeyVault
 resource "azurerm_role_assignment" "acr_pull" {
   scope                = var.acr_id
   role_definition_name = "AcrPull"
+  principal_id         = var.identity_principal_id
+}
+
+resource "azurerm_role_assignment" "kv_secrets_user" {
+  scope                = var.keyvault_id
+  role_definition_name = "Key Vault Secrets User"
   principal_id         = var.identity_principal_id
 }
 
@@ -37,6 +46,15 @@ resource "azapi_resource" "job" {
           }
         ]
 
+        # ✅ Secret via KeyVault (NO en código)
+        secrets = [
+          {
+            name        = "my-secret"
+            keyVaultUrl = var.keyvault_secret_id
+            identity    = var.identity_id
+          }
+        ]
+
         scheduleTriggerConfig = var.trigger_type == "Schedule" ? {
           cronExpression = var.cron_expression
         } : null
@@ -47,6 +65,14 @@ resource "azapi_resource" "job" {
           {
             name  = "job"
             image = "${var.acr_login_server}/${var.job_image_name}:${var.job_image_tag}"
+
+            env = [
+              {
+                name      = "MY_SECRET"
+                secretRef = "my-secret"
+              }
+            ]
+
             resources = {
               cpu    = 0.25
               memory = "0.5Gi"
@@ -57,5 +83,9 @@ resource "azapi_resource" "job" {
     }
   }
 
-  depends_on = [azurerm_role_assignment.acr_pull]
+  # Asegura que roles ya existen antes de intentar pull / kv
+  depends_on = [
+    azurerm_role_assignment.acr_pull,
+    azurerm_role_assignment.kv_secrets_user
+  ]
 }
