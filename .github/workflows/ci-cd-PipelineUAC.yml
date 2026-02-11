@@ -190,4 +190,9 @@ jobs:
           TF_VAR_app_image_tag: ${{ github.sha }}
           TF_VAR_job_image_tag: ${{ github.sha }}
           TF_VAR_my_secret_value: ${{ secrets.MY_SECRET_VALUE }}
+
+          ARM_USE_OIDC: true
+          ARM_CLIENT_ID: ${{ secrets.AZURE_CLIENT_ID }}
+          ARM_TENANT_ID: ${{ secrets.AZURE_TENANT_ID }}
+          ARM_SUBSCRIPTION_ID: ${{ secrets.AZURE_SUBSCRIPTION_ID }}
         run: terraform apply -auto-approve
