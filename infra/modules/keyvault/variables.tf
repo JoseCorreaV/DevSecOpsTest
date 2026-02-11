@@ -4,7 +4,7 @@ variable "prefix"              { type = string }
 
 variable "secrets_officer_principal_ids" {
   type        = list(string)
-  description = "Azure AD object IDs con permisos para gestionar secretos en el Key Vault (RBAC)."
+  description = "Azure AD object IDs con permisos 'Key Vault Secrets Officer' sobre el vault."
 }
 
 variable "my_secret_value" {

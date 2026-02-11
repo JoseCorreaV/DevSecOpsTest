@@ -93,7 +93,7 @@ jobs:
           ARM_CLIENT_ID: ${{ secrets.AZURE_CLIENT_ID }}
           ARM_TENANT_ID: ${{ secrets.AZURE_TENANT_ID }}
           ARM_SUBSCRIPTION_ID: ${{ secrets.AZURE_SUBSCRIPTION_ID }}
-        run: terraform plan -no-color -lock=false
+        run: terraform plan -no-color -lock=false -refresh=false
 
       # -------------------------
       # Checkov -> SARIF
@@ -215,7 +215,7 @@ jobs:
           ARM_CLIENT_ID: ${{ secrets.AZURE_CLIENT_ID }}
           ARM_TENANT_ID: ${{ secrets.AZURE_TENANT_ID }}
           ARM_SUBSCRIPTION_ID: ${{ secrets.AZURE_SUBSCRIPTION_ID }}
-        run: terraform plan -no-color -lock-timeout=5m
+        run: terraform plan -no-color -lock-timeout=5m -refresh=false
 
       - name: Terraform apply (PUSH)
         if: github.event_name == 'push' && (github.ref_name == 'develop' || github.ref_name == 'main')
