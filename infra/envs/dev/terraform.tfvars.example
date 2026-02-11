@@ -1,0 +1,9 @@
+resource_group_name = "rg-techflow-dev"
+prefix              = "techflowdev"
+location            = "eastus"
+keyvault_name       = "techflowdevkv"
+acr_name            = "techflowdevacr"
+
+keyvault_secrets_officer_principal_ids = [
+  "00000000-0000-0000-0000-000000000000"
+]
