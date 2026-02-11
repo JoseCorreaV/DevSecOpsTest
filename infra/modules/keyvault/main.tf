@@ -12,7 +12,7 @@ resource "azurerm_key_vault" "this" {
 
   # Checkov: recoverable + purge protection
   purge_protection_enabled   = true
-  soft_delete_retention_days = 90
+  soft_delete_retention_days = 7
 
   # En laboratorio lo dejas abierto; para pasar Checkov completo necesitarías Private Endpoint + firewall rules
   public_network_access_enabled = true

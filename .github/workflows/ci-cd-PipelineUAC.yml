@@ -6,6 +6,11 @@ on:
   pull_request:
     branches: [develop, main]
 
+# Evita carreras (dos runs tocando el mismo state al tiempo)
+concurrency:
+  group: ci-${{ github.workflow }}-${{ github.ref }}
+  cancel-in-progress: true
+
 permissions:
   id-token: write
   contents: read
@@ -24,7 +29,7 @@ jobs:
       - name: Checkout
         uses: actions/checkout@v4
 
-      # Login a Azure DESDE EL INICIO (para que terraform init del backend funcione)
+      # Login a Azure desde el inicio (terraform backend + az cli + ACR)
       - name: Azure Login (OIDC)
         uses: azure/login@v2
         with:
@@ -34,6 +39,19 @@ jobs:
 
       - name: Setup Terraform
         uses: hashicorp/setup-terraform@v3
+
+      # Calcula un KEY de state seguro:
+      # - PR: pr-<numero>.tfstate (no usa "5/merge")
+      # - Push: develop.tfstate / main.tfstate
+      - name: Set TFSTATE key
+        shell: bash
+        run: |
+          if [ "${{ github.event_name }}" = "pull_request" ]; then
+            echo "TFSTATE_KEY=pr-${{ github.event.pull_request.number }}.tfstate" >> "$GITHUB_ENV"
+          else
+            echo "TFSTATE_KEY=${{ github.ref_name }}.tfstate" >> "$GITHUB_ENV"
+          fi
+          echo "Using TFSTATE_KEY=$TFSTATE_KEY"
 
       # -------------------------
       # Terraform (fmt/init/validate)
@@ -49,15 +67,27 @@ jobs:
             -backend-config="resource_group_name=${{ vars.TFSTATE_RG }}" \
             -backend-config="storage_account_name=${{ vars.TFSTATE_STORAGE }}" \
             -backend-config="container_name=${{ vars.TFSTATE_CONTAINER }}" \
-            -backend-config="key=${{ github.ref_name }}.tfstate" \
+            -backend-config="key=${{ env.TFSTATE_KEY }}" \
             -backend-config="use_azuread_auth=true"
 
       - name: Terraform validate
         working-directory: ${{ env.TF_DIR }}
         run: terraform validate
 
+      # Plan en PR sin lock (no rompe por state blob locked)
+      - name: Terraform plan (PR, no lock)
+        if: github.event_name == 'pull_request'
+        working-directory: ${{ env.TF_DIR }}
+        env:
+          TF_VAR_my_secret_value: ${{ secrets.MY_SECRET_VALUE }}
+          ARM_USE_OIDC: true
+          ARM_CLIENT_ID: ${{ secrets.AZURE_CLIENT_ID }}
+          ARM_TENANT_ID: ${{ secrets.AZURE_TENANT_ID }}
+          ARM_SUBSCRIPTION_ID: ${{ secrets.AZURE_SUBSCRIPTION_ID }}
+        run: terraform plan -no-color -lock=false
+
       # -------------------------
-      # Checkov -> SARIF (no rompe deploy)
+      # Checkov -> SARIF (no rompe pipeline)
       # -------------------------
       - name: IaC scan (Checkov)
         id: checkov
@@ -67,25 +97,27 @@ jobs:
           directory: ${{ env.TF_DIR }}
           quiet: true
           output_format: sarif
-          output_file_path: results.sarif
+          output_file_path: checkov.sarif
           skip_check: "CKV_AZURE_166,CKV_AZURE_139,CKV_AZURE_233,CKV_AZURE_163,CKV_AZURE_167,CKV_AZURE_164,CKV_AZURE_237,CKV_AZURE_165,CKV_AZURE_189,CKV_AZURE_109,CKV2_AZURE_32"
 
-      - name: Check results.sarif exists
+      - name: Upload Checkov SARIF (if exists)
         if: always()
-        id: checkov_sarif_check
+        continue-on-error: true
+        shell: bash
         run: |
-          if [ -f "results.sarif" ]; then
-            echo "exists=true" >> "$GITHUB_OUTPUT"
+          if [ -f "checkov.sarif" ]; then
+            echo "checkov.sarif exists"
           else
-            echo "exists=false" >> "$GITHUB_OUTPUT"
+            echo "checkov.sarif NOT found (skip upload)"
+            exit 0
           fi
 
       - name: Upload Checkov SARIF
-        if: always() && steps.checkov_sarif_check.outputs.exists == 'true'
+        if: always()
         continue-on-error: true
         uses: github/codeql-action/upload-sarif@v3
         with:
-          sarif_file: results.sarif
+          sarif_file: checkov.sarif
 
       # -------------------------
       # Docker build
@@ -112,18 +144,20 @@ jobs:
           severity: CRITICAL,HIGH
           exit-code: "0"
 
-      - name: Check trivy-api.sarif exists
+      - name: Upload Trivy SARIF (api) - if exists
         if: always()
-        id: trivy_api_sarif_check
+        continue-on-error: true
+        shell: bash
         run: |
           if [ -f "trivy-api.sarif" ]; then
-            echo "exists=true" >> "$GITHUB_OUTPUT"
+            echo "trivy-api.sarif exists"
           else
-            echo "exists=false" >> "$GITHUB_OUTPUT"
+            echo "trivy-api.sarif NOT found (skip upload)"
+            exit 0
           fi
 
       - name: Upload Trivy SARIF (api)
-        if: always() && steps.trivy_api_sarif_check.outputs.exists == 'true'
+        if: always()
         continue-on-error: true
         uses: github/codeql-action/upload-sarif@v3
         with:
@@ -142,18 +176,20 @@ jobs:
           severity: CRITICAL,HIGH
           exit-code: "0"
 
-      - name: Check trivy-job.sarif exists
+      - name: Upload Trivy SARIF (job) - if exists
         if: always()
-        id: trivy_job_sarif_check
+        continue-on-error: true
+        shell: bash
         run: |
           if [ -f "trivy-job.sarif" ]; then
-            echo "exists=true" >> "$GITHUB_OUTPUT"
+            echo "trivy-job.sarif exists"
           else
-            echo "exists=false" >> "$GITHUB_OUTPUT"
+            echo "trivy-job.sarif NOT found (skip upload)"
+            exit 0
           fi
 
       - name: Upload Trivy SARIF (job)
-        if: always() && steps.trivy_job_sarif_check.outputs.exists == 'true'
+        if: always()
         continue-on-error: true
         uses: github/codeql-action/upload-sarif@v3
         with:
@@ -161,12 +197,13 @@ jobs:
 
       - name: Debug - list SARIF files
         if: always()
+        shell: bash
         run: |
-          echo "SARIF files:"
-          find . -maxdepth 3 -type f -name "*.sarif" -print || true
+          echo "SARIF files found:"
+          find . -maxdepth 4 -type f -name "*.sarif" -print || true
 
       # --------------------------
-      # DEPLOY solo en PUSH (no PR)
+      # DEPLOY solo en PUSH a develop/main
       # --------------------------
       - name: ACR login
         if: github.event_name == 'push' && (github.ref_name == 'develop' || github.ref_name == 'main')
@@ -174,6 +211,7 @@ jobs:
 
       - name: Tag & Push images to ACR
         if: github.event_name == 'push' && (github.ref_name == 'develop' || github.ref_name == 'main')
+        shell: bash
         run: |
           ACR_LOGIN_SERVER=$(az acr show -n ${{ vars.ACR_NAME }} --query loginServer -o tsv)
 
@@ -183,16 +221,27 @@ jobs:
           docker tag $JOB_IMAGE_NAME:${{ github.sha }} $ACR_LOGIN_SERVER/$JOB_IMAGE_NAME:${{ github.sha }}
           docker push $ACR_LOGIN_SERVER/$JOB_IMAGE_NAME:${{ github.sha }}
 
-      - name: Terraform apply
+      # En push hacemos plan con lock normal (protege state)
+      - name: Terraform plan (PUSH)
+        if: github.event_name == 'push' && (github.ref_name == 'develop' || github.ref_name == 'main')
+        working-directory: ${{ env.TF_DIR }}
+        env:
+          TF_VAR_my_secret_value: ${{ secrets.MY_SECRET_VALUE }}
+          ARM_USE_OIDC: true
+          ARM_CLIENT_ID: ${{ secrets.AZURE_CLIENT_ID }}
+          ARM_TENANT_ID: ${{ secrets.AZURE_TENANT_ID }}
+          ARM_SUBSCRIPTION_ID: ${{ secrets.AZURE_SUBSCRIPTION_ID }}
+        run: terraform plan -no-color -lock-timeout=5m
+
+      - name: Terraform apply (PUSH)
         if: github.event_name == 'push' && (github.ref_name == 'develop' || github.ref_name == 'main')
         working-directory: ${{ env.TF_DIR }}
         env:
           TF_VAR_app_image_tag: ${{ github.sha }}
           TF_VAR_job_image_tag: ${{ github.sha }}
           TF_VAR_my_secret_value: ${{ secrets.MY_SECRET_VALUE }}
-
           ARM_USE_OIDC: true
           ARM_CLIENT_ID: ${{ secrets.AZURE_CLIENT_ID }}
           ARM_TENANT_ID: ${{ secrets.AZURE_TENANT_ID }}
           ARM_SUBSCRIPTION_ID: ${{ secrets.AZURE_SUBSCRIPTION_ID }}
-        run: terraform apply -auto-approve
+        run: terraform apply -auto-approve -lock-timeout=5m
