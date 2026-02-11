@@ -13,6 +13,14 @@ resource "azurerm_role_assignment" "kv_secrets_user" {
   scope                = var.keyvault_id
   role_definition_name = "Key Vault Secrets User"
   principal_id         = var.identity_principal_id
+
+  # GUID estable: evita 409 RoleAssignmentExists
+  name = uuidv5(
+    "6ba7b811-9dad-11d1-80b4-00c04fd430c8",
+    "${var.keyvault_id}|Key Vault Secrets User|${var.identity_principal_id}"
+  )
+
+  skip_service_principal_aad_check = true
 }
 
 resource "azapi_resource" "job" {
