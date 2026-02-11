@@ -1,46 +1,50 @@
-# DevSecOpsTest – CI/CD + IaC + Security Scans
+# DevSecOpsTest – CI/CD + Terraform + Security Scans (Azure Container Apps)
 
-Repositorio de ejemplo con:
-- Infraestructura como código (Terraform sobre Azure).
-- Construcción de imágenes Docker (API y Job).
-- Escaneo de IaC (Checkov) y de contenedores (Trivy) con salida SARIF a GitHub Code Scanning.
-- Despliegue automatizado por branch mediante GitHub Actions y autenticación OIDC (sin secretos largos).
+Este repositorio implementa lo solicitado en la prueba:
+- Infraestructura como código (Terraform) en Azure:
+  - Key Vault (secreto de negocio)
+  - Azure Container Registry (ACR)
+  - Container Apps Environment (CAE)
+  - Container App (API) con **init container** y lectura de secreto desde Key Vault via Managed Identity
+  - Container App Job que imprime "Job ejecutado con éxito" y termina
+- Pipeline CI/CD con GitHub Actions:
+  - Build de imágenes Docker (API + Job)
+  - Escaneo IaC (Checkov)
+  - Escaneo de imágenes (Trivy)
+  - Push a ACR y Deploy con Terraform en `develop` y `main`
 
 ## Requisitos
 
 ### Local
 - Azure CLI (`az`)
-- Terraform
-- Docker (opcional si quieres construir imágenes localmente)
+- Terraform >= 1.5
+- Docker (opcional si quieres build local)
 
-### En GitHub
-Configurar **Secrets** y **Variables** en el repositorio (Settings → Secrets and variables → Actions).
+### En GitHub (Settings → Secrets and variables → Actions)
 
-## Variables (Actions → Variables)
+#### Secrets
+- `AZURE_CLIENT_ID`
+- `AZURE_TENANT_ID`
+- `AZURE_SUBSCRIPTION_ID`
+- `MY_SECRET_VALUE` (valor del secreto que se guarda en Key Vault)
+
+#### Variables
+- `ACR_NAME` = `techflowdevacr`
+- `AZURE_RESOURCE_GROUP` = `rg-techflow-dev`
+- `KEYVAULT_NAME` = `techflowdevkv`
 - `TFSTATE_RG` = `rg-techflow-tfstate`
 - `TFSTATE_STORAGE` = `sttechflowtfstate`
 - `TFSTATE_CONTAINER` = `tfstate`
-- `ACR_NAME` = `techflowdevacr`
-- `AZURE_RESOURCE_GROUP` = `rg-techflow-dev`
-
-## Secrets (Actions → Secrets)
-- `AZURE_CLIENT_ID` = *(Client ID del App Registration con OIDC)*
-- `AZURE_TENANT_ID` = `13d44989-0830-4867-9fd6-da7ae500a47f`
-- `AZURE_SUBSCRIPTION_ID` = `bfd5c8d6-d16f-464b-99b0-1bf67d6ca929`
-- `MY_SECRET_VALUE` = *(secreto requerido por Terraform)*
-
-> Nota: `AZURE_CLIENT_ID` debe corresponder al App Registration que tenga Federated Credentials configurados para GitHub (`pull_request`, `develop`, `main`) y roles RBAC sobre el Storage del tfstate, el RG del ambiente y el ACR.
 
 ## Estructura del proyecto
-
 - `infra/` Terraform (env y módulos)
-- `app/` API (Dockerfile + código)
-- `job/` Job (Dockerfile + script)
-- `.github/workflows/` Pipelines CI/CD
+- `app/` API Flask (retorna MY_SECRET)
+- `job/` Job (imprime mensaje y termina)
+- `.github/workflows/` Pipeline CI/CD
 
-## Ejecución local
+## Cómo ejecutar localmente (infra)
 
-### 1) Autenticación Azure
+1) Login en Azure
 ```bash
 az login
-az account set --subscription bfd5c8d6-d16f-464b-99b0-1bf67d6ca929
+az account set --subscription <SUBSCRIPTION_ID>
