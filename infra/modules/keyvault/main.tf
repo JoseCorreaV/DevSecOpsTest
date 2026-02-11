@@ -9,9 +9,12 @@ resource "azurerm_key_vault" "this" {
   sku_name = "standard"
 
   rbac_authorization_enabled = true
-  purge_protection_enabled   = false
-  soft_delete_retention_days = 7
 
+  # Checkov: recoverable + purge protection
+  purge_protection_enabled   = true
+  soft_delete_retention_days = 90
+
+  # En laboratorio lo dejas abierto; para pasar Checkov completo necesitarías Private Endpoint + firewall rules
   public_network_access_enabled = true
 }
 
@@ -26,6 +29,10 @@ resource "azurerm_key_vault_secret" "my_secret" {
   name         = "my-secret"
   value        = var.my_secret_value
   key_vault_id = azurerm_key_vault.this.id
+
+  # Checkov: content_type + expiration
+  content_type    = "text/plain"
+  expiration_date = timeadd(timestamp(), "8760h") # +1 año
 
   depends_on = [azurerm_role_assignment.secrets_officer_current]
 }
