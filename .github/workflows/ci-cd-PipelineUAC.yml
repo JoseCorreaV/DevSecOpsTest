@@ -2,7 +2,10 @@ name: CI-CD
 
 on:
   push:
-    branches: [develop, main]
+    branches:
+      - develop
+      - main
+      - "feature/**"
   pull_request:
     branches: [develop, main]
 
@@ -28,6 +31,19 @@ jobs:
       - name: Checkout
         uses: actions/checkout@v4
 
+      - name: Debug context
+        shell: bash
+        run: |
+          echo "event_name=${{ github.event_name }}"
+          echo "ref=${{ github.ref }}"
+          echo "ref_name=${{ github.ref_name }}"
+          echo "sha=${{ github.sha }}"
+          if [ "${{ github.event_name }}" = "pull_request" ]; then
+            echo "pr_number=${{ github.event.pull_request.number }}"
+            echo "pr_base=${{ github.event.pull_request.base.ref }}"
+            echo "pr_head=${{ github.event.pull_request.head.ref }}"
+          fi
+
       - name: Azure Login (OIDC)
         uses: azure/login@v2
         with:
@@ -39,7 +55,7 @@ jobs:
         uses: hashicorp/setup-terraform@v3
 
       # PR -> pr-<num>.tfstate
-      # push -> develop.tfstate / main.tfstate
+      # push -> <branch>.tfstate
       - name: Set TFSTATE key
         shell: bash
         run: |
@@ -70,10 +86,6 @@ jobs:
         working-directory: ${{ env.TF_DIR }}
         run: terraform validate
 
-      # -------------------------
-      # Terraform plan
-      # -refresh=false evita lecturas RBAC (KeyVault) en PR y push.
-      # -------------------------
       - name: Terraform plan (PR)
         if: github.event_name == 'pull_request'
         working-directory: ${{ env.TF_DIR }}
@@ -85,8 +97,8 @@ jobs:
           ARM_SUBSCRIPTION_ID: ${{ secrets.AZURE_SUBSCRIPTION_ID }}
         run: terraform plan -no-color -lock=false -refresh=false
 
-      - name: Terraform plan (push develop/main)
-        if: github.event_name == 'push' && (github.ref_name == 'develop' || github.ref_name == 'main')
+      - name: Terraform plan (push any branch)
+        if: github.event_name == 'push'
         working-directory: ${{ env.TF_DIR }}
         env:
           TF_VAR_my_secret_value: ${{ secrets.MY_SECRET_VALUE }}
@@ -96,9 +108,6 @@ jobs:
           ARM_SUBSCRIPTION_ID: ${{ secrets.AZURE_SUBSCRIPTION_ID }}
         run: terraform plan -no-color -lock-timeout=5m -refresh=false
 
-      # -------------------------
-      # Checkov -> SARIF
-      # -------------------------
       - name: IaC scan (Checkov)
         continue-on-error: true
         uses: bridgecrewio/checkov-action@v12
@@ -116,18 +125,12 @@ jobs:
         with:
           sarif_file: checkov.sarif
 
-      # -------------------------
-      # Docker build
-      # -------------------------
       - name: Docker build (api)
         run: docker build -t ${{ env.APP_IMAGE_NAME }}:${{ github.sha }} ./app
 
       - name: Docker build (job)
         run: docker build -t ${{ env.JOB_IMAGE_NAME }}:${{ github.sha }} ./job
 
-      # -------------------------
-      # Trivy -> SARIF
-      # -------------------------
       - name: Trivy scan (api)
         continue-on-error: true
         uses: aquasecurity/trivy-action@0.24.0
@@ -166,9 +169,7 @@ jobs:
         with:
           sarif_file: trivy-job.sarif
 
-      # --------------------------
-      # Deploy (solo push develop/main)
-      # --------------------------
+      # DEPLOY SOLO EN develop/main (push)
       - name: ACR login
         if: github.event_name == 'push' && (github.ref_name == 'develop' || github.ref_name == 'main')
         run: az acr login --name ${{ vars.ACR_NAME }}
@@ -186,7 +187,6 @@ jobs:
           docker tag ${{ env.JOB_IMAGE_NAME }}:${{ github.sha }} $ACR_LOGIN_SERVER/${{ env.JOB_IMAGE_NAME }}:${{ github.sha }}
           docker push $ACR_LOGIN_SERVER/${{ env.JOB_IMAGE_NAME }}:${{ github.sha }}
 
-      # 1) Crear/actualizar base (KeyVault, Identity, ACR, CAE) sin tocar el secreto todavía.
       - name: Terraform apply (foundation)
         if: github.event_name == 'push' && (github.ref_name == 'develop' || github.ref_name == 'main')
         working-directory: ${{ env.TF_DIR }}
@@ -203,8 +203,6 @@ jobs:
             -target=module.identity \
             -target=module.keyvault.azurerm_key_vault.this
 
-      # 2) Dar permiso al SP del pipeline para crear/leer secretos (Key Vault Secrets Officer)
-      #    (evita 403 ForbiddenByRbac en el recurso azurerm_key_vault_secret).
       - name: Bootstrap KeyVault RBAC for pipeline SP
         if: github.event_name == 'push' && (github.ref_name == 'develop' || github.ref_name == 'main')
         shell: bash
@@ -214,14 +212,12 @@ jobs:
           SP_OBJECT_ID=$(az ad sp show --id "${{ secrets.AZURE_CLIENT_ID }}" --query id -o tsv)
           KV_ID=$(az keyvault show -n "${{ vars.KEYVAULT_NAME }}" -g "${{ vars.AZURE_RESOURCE_GROUP }}" --query id -o tsv)
 
-          # Idempotente: si ya existe, no falla.
           az role assignment create \
             --assignee-object-id "$SP_OBJECT_ID" \
             --assignee-principal-type ServicePrincipal \
             --role "Key Vault Secrets Officer" \
             --scope "$KV_ID" >/dev/null 2>&1 || true
 
-          # Espera propagación RBAC (evita 403)
           echo "Waiting RBAC propagation..."
           for i in $(seq 1 30); do
             FOUND=$(az role assignment list --assignee-object-id "$SP_OBJECT_ID" --scope "$KV_ID" --query "[?roleDefinitionName=='Key Vault Secrets Officer'] | length(@)" -o tsv)
@@ -232,7 +228,6 @@ jobs:
             sleep 10
           done
 
-      # 3) Apply completo (crea/actualiza secreto y despliega apps/jobs con imagen = github.sha)
       - name: Terraform apply (full)
         if: github.event_name == 'push' && (github.ref_name == 'develop' || github.ref_name == 'main')
         working-directory: ${{ env.TF_DIR }}
