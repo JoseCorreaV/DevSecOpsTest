@@ -35,7 +35,7 @@ jobs:
           tenant-id: ${{ secrets.AZURE_TENANT_ID }}
           subscription-id: ${{ secrets.AZURE_SUBSCRIPTION_ID }}
 
-      # Se usa para el módulo keyvault (roles estables por lista)
+      # Exporta el objectId del SP como lista (lo consume el módulo keyvault)
       - name: Set TF_VAR_keyvault_secrets_officer_principal_ids
         shell: bash
         run: |
@@ -47,6 +47,8 @@ jobs:
       - name: Setup Terraform
         uses: hashicorp/setup-terraform@v3
 
+      # PR -> pr-<num>.tfstate
+      # push -> develop.tfstate / main.tfstate
       - name: Set TFSTATE key
         shell: bash
         run: |
@@ -68,6 +70,11 @@ jobs:
 
       - name: Terraform init (remote state using Azure AD)
         working-directory: ${{ env.TF_DIR }}
+        env:
+          ARM_USE_OIDC: true
+          ARM_CLIENT_ID: ${{ secrets.AZURE_CLIENT_ID }}
+          ARM_TENANT_ID: ${{ secrets.AZURE_TENANT_ID }}
+          ARM_SUBSCRIPTION_ID: ${{ secrets.AZURE_SUBSCRIPTION_ID }}
         run: |
           terraform init \
             -backend-config="resource_group_name=${{ vars.TFSTATE_RG }}" \
@@ -80,7 +87,9 @@ jobs:
         working-directory: ${{ env.TF_DIR }}
         run: terraform validate
 
-      # PR: plan sin lock y SIN refresh (evita 403 por KeyVault en refresh)
+      # -------------------------
+      # PLAN (SIN REFRESH) -> evita 403 KeyVault en plan
+      # -------------------------
       - name: Terraform plan (PR)
         if: github.event_name == 'pull_request'
         working-directory: ${{ env.TF_DIR }}
@@ -92,7 +101,6 @@ jobs:
           ARM_SUBSCRIPTION_ID: ${{ secrets.AZURE_SUBSCRIPTION_ID }}
         run: terraform plan -no-color -lock=false -refresh=false
 
-      # PUSH develop/main: plan sin refresh (opcional, pero útil)
       - name: Terraform plan (PUSH)
         if: github.event_name == 'push' && (github.ref_name == 'develop' || github.ref_name == 'main')
         working-directory: ${{ env.TF_DIR }}
@@ -105,7 +113,7 @@ jobs:
         run: terraform plan -no-color -lock-timeout=5m -refresh=false
 
       # -------------------------
-      # Checkov -> SARIF (IaC)
+      # Checkov -> SARIF
       # -------------------------
       - name: IaC scan (Checkov)
         continue-on-error: true
@@ -125,7 +133,7 @@ jobs:
           sarif_file: checkov.sarif
 
       # -------------------------
-      # Docker build + Trivy (solo develop/main)
+      # Docker build + Trivy (solo push develop/main)
       # -------------------------
       - name: Docker build (api)
         if: github.event_name == 'push' && (github.ref_name == 'develop' || github.ref_name == 'main')
