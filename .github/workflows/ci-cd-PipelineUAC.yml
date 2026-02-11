@@ -12,10 +12,7 @@ permissions:
   security-events: write
 
 env:
-  # Terraform (en tu repo solo existe envs/dev)
   TF_DIR: ./infra/envs/dev
-
-  # Imágenes
   APP_IMAGE_NAME: techflow-api
   JOB_IMAGE_NAME: techflow-job
 
@@ -30,6 +27,9 @@ jobs:
       - name: Setup Terraform
         uses: hashicorp/setup-terraform@v3
 
+      # -------------------------
+      # Terraform (fmt/init/validate)
+      # -------------------------
       - name: Terraform fmt
         working-directory: ${{ env.TF_DIR }}
         run: terraform fmt -check -recursive
@@ -43,7 +43,7 @@ jobs:
         run: terraform validate
 
       # -------------------------
-      # IaC Scan (Checkov) -> SARIF
+      # Checkov -> SARIF (estable)
       # -------------------------
       - name: IaC scan (Checkov)
         uses: bridgecrewio/checkov-action@v12
@@ -52,7 +52,6 @@ jobs:
           quiet: true
           output_format: sarif
           output_file_path: results.sarif
-          # IMPORTANTE: en una sola línea (sin saltos) para evitar errores
           skip_check: "CKV_AZURE_166,CKV_AZURE_139,CKV_AZURE_233,CKV_AZURE_163,CKV_AZURE_167,CKV_AZURE_164,CKV_AZURE_237,CKV_AZURE_165,CKV_AZURE_189,CKV_AZURE_109,CKV2_AZURE_32"
 
       - name: Upload Checkov SARIF
@@ -71,7 +70,7 @@ jobs:
         run: docker build -t $JOB_IMAGE_NAME:${{ github.sha }} ./job
 
       # -------------------------
-      # Trivy scans -> SARIF (NO rompe pipeline, pero deja evidencia)
+      # Trivy -> SARIF (NO bloquea, deja evidencia)
       # -------------------------
       - name: Trivy scan (api image) - SARIF report
         uses: aquasecurity/trivy-action@0.24.0
@@ -108,9 +107,7 @@ jobs:
           sarif_file: trivy-job.sarif
 
       # --------------------------
-      # DEPLOY (push a develop o main)
-      # OJO: en tu repo solo existe infra/envs/dev.
-      # Si "main" debe ser PROD, crea infra/envs/prod y cambia TF_DIR dinámicamente.
+      # DEPLOY solo en PUSH (no PR) a develop/main
       # --------------------------
       - name: Azure Login (OIDC)
         if: github.event_name == 'push' && (github.ref_name == 'develop' || github.ref_name == 'main')
@@ -141,4 +138,5 @@ jobs:
         env:
           TF_VAR_app_image_tag: ${{ github.sha }}
           TF_VAR_job_image_tag: ${{ github.sha }}
+          TF_VAR_my_secret_value: ${{ secrets.MY_SECRET_VALUE }}
         run: terraform apply -auto-approve
