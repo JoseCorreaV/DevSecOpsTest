@@ -13,6 +13,13 @@ variable "prefix" {
   description = "Prefijo para nombres de recursos (ej: techflowdev)"
 }
 
+# ✅ Evita drift/403: lista estable de Object IDs que administran secretos (RBAC) del Key Vault.
+# Debe incluir el Service Principal del pipeline (OIDC) y, si quieres ejecutar local, también tu usuario.
+variable "keyvault_secrets_officer_principal_ids" {
+  type        = list(string)
+  description = "Azure AD Object IDs con rol 'Key Vault Secrets Officer' sobre el vault."
+}
+
 variable "my_secret_value" {
   type        = string
   sensitive   = true
