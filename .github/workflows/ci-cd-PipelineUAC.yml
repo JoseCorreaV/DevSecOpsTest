@@ -19,6 +19,7 @@ permissions:
   security-events: write
 
 env:
+  # default (se sobreescribe con el step "Set TF_DIR")
   TF_DIR: ./infra/envs/dev
   APP_IMAGE_NAME: techflow-api
   JOB_IMAGE_NAME: techflow-job
@@ -30,6 +31,26 @@ jobs:
     steps:
       - name: Checkout
         uses: actions/checkout@v4
+
+      # Decide el directorio Terraform según rama/evento:
+      # - PR siempre plan contra DEV (no tocar prod por PR)
+      # - push develop => DEV
+      # - push main    => PROD
+      # - push feature => DEV (solo para plan)
+      - name: Set TF_DIR (dev/prod)
+        shell: bash
+        run: |
+          set -euo pipefail
+          if [ "${{ github.event_name }}" = "pull_request" ]; then
+            echo "TF_DIR=./infra/envs/dev" >> "$GITHUB_ENV"
+          else
+            if [ "${{ github.ref_name }}" = "main" ]; then
+              echo "TF_DIR=./infra/envs/prod" >> "$GITHUB_ENV"
+            else
+              echo "TF_DIR=./infra/envs/dev" >> "$GITHUB_ENV"
+            fi
+          fi
+          echo "Using TF_DIR=$TF_DIR"
 
       - name: Azure Login (OIDC)
         uses: azure/login@v2
@@ -44,7 +65,7 @@ jobs:
           terraform_wrapper: false
 
       # PR -> pr-<num>.tfstate
-      # push -> <branch>.tfstate
+      # push -> <branch>.tfstate  (develop.tfstate / main.tfstate / feature-....tfstate si quieres)
       - name: Set TFSTATE key
         shell: bash
         run: |
@@ -76,6 +97,7 @@ jobs:
         run: terraform validate
 
       # Plan robusto: permite exit 0 y 2; falla solo con 1
+      # OJO: PR a main también planeará contra DEV por seguridad.
       - name: Terraform plan
         working-directory: ${{ env.TF_DIR }}
         shell: bash
@@ -99,7 +121,7 @@ jobs:
           fi
           exit 0
 
-      # Seguridad IaC (Checkov) - requerido por el doc :contentReference[oaicite:6]{index=6}
+      # Seguridad IaC (Checkov)
       - name: IaC scan (Checkov)
         continue-on-error: true
         uses: bridgecrewio/checkov-action@v12
@@ -116,15 +138,18 @@ jobs:
         with:
           sarif_file: checkov.sarif
 
-      # Build imágenes (requerido por el doc) :contentReference[oaicite:7]{index=7}
+      # Build imágenes SOLO en pushes a develop/main (no PR, no feature)
       - name: Docker build (api)
+        if: github.event_name == 'push' && (github.ref_name == 'develop' || github.ref_name == 'main')
         run: docker build -t ${{ env.APP_IMAGE_NAME }}:${{ github.sha }} ./app
 
       - name: Docker build (job)
+        if: github.event_name == 'push' && (github.ref_name == 'develop' || github.ref_name == 'main')
         run: docker build -t ${{ env.JOB_IMAGE_NAME }}:${{ github.sha }} ./job
 
-      # Seguridad imágenes (Trivy) - requerido por el doc :contentReference[oaicite:8]{index=8}
+      # Seguridad imágenes (Trivy) solo si se construyeron
       - name: Trivy scan (api)
+        if: github.event_name == 'push' && (github.ref_name == 'develop' || github.ref_name == 'main')
         continue-on-error: true
         uses: aquasecurity/trivy-action@0.24.0
         with:
@@ -144,6 +169,7 @@ jobs:
           sarif_file: trivy-api.sarif
 
       - name: Trivy scan (job)
+        if: github.event_name == 'push' && (github.ref_name == 'develop' || github.ref_name == 'main')
         continue-on-error: true
         uses: aquasecurity/trivy-action@0.24.0
         with:
@@ -162,7 +188,7 @@ jobs:
         with:
           sarif_file: trivy-job.sarif
 
-      # Push a ACR (solo develop/main) - requerido por el doc :contentReference[oaicite:9]{index=9}
+      # Push a ACR (solo develop/main)
       - name: ACR login
         if: github.event_name == 'push' && (github.ref_name == 'develop' || github.ref_name == 'main')
         run: az acr login --name ${{ vars.ACR_NAME }}
@@ -180,7 +206,8 @@ jobs:
           docker tag ${{ env.JOB_IMAGE_NAME }}:${{ github.sha }} $ACR_LOGIN_SERVER/${{ env.JOB_IMAGE_NAME }}:${{ github.sha }}
           docker push $ACR_LOGIN_SERVER/${{ env.JOB_IMAGE_NAME }}:${{ github.sha }}
 
-      # Deploy (solo develop/main) - requerido por el doc :contentReference[oaicite:10]{index=10}
+      # Deploy (solo develop/main) usando el TF_DIR correcto:
+      # develop -> dev, main -> prod
       - name: Terraform apply (deploy)
         if: github.event_name == 'push' && (github.ref_name == 'develop' || github.ref_name == 'main')
         working-directory: ${{ env.TF_DIR }}
