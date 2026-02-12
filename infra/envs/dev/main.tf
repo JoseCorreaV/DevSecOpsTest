@@ -25,7 +25,6 @@ provider "azurerm" {
 
 provider "azapi" {}
 
-# Sanitiza prefix para cumplir naming de Azure y evitar "--"
 locals {
   raw_prefix = lower(var.prefix)
 
@@ -44,9 +43,16 @@ locals {
   c3 = replace(local.c2, "--", "-")
   c4 = replace(local.c3, "--", "-")
 
-  # recorta para no pasarte en recursos que tienen límites estrictos
-  prefix = substr(local.c4, 0, 24)
+  # recorta longitud
+  cut = substr(local.c4, 0, 24)
+
+  # si termina en "-", agrega "x" para que quede alfanumérico al final
+  last_char  = substr(local.cut, length(local.cut) - 1, 1)
+  prefix_fix = local.last_char == "-" ? "${local.cut}x" : local.cut
+
+  prefix = local.prefix_fix
 }
+
 
 module "acr" {
   source              = "../../modules/acr"
