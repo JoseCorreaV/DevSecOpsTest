@@ -1,0 +1,8 @@
+﻿{
+  "name": "gh-main",
+  "issuer": "https://token.actions.githubusercontent.com",
+  "subject": "repo:JoseCorreaV/DevSecOpsTest:ref:refs/heads/main",
+  "audiences": [
+    "api://AzureADTokenExchange"
+  ]
+}

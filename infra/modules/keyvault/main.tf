@@ -11,9 +11,15 @@ resource "azurerm_key_vault" "this" {
   # RBAC mode (recomendado)
   rbac_authorization_enabled = true
 
-  purge_protection_enabled        = true
-  soft_delete_retention_days      = 7
-  public_network_access_enabled   = true
+  purge_protection_enabled      = true
+  soft_delete_retention_days    = 7
+  public_network_access_enabled = true
+
+  lifecycle {
+    # Evita que Terraform intente destruir el Key Vault (soft-delete/purge-protection).
+    # En CI suele fallar con 403/409 al consultar deletedVaults o por protección de purga.
+    prevent_destroy = true
+  }
 }
 
 # Nota:

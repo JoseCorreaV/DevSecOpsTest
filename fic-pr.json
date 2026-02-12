@@ -1,0 +1,8 @@
+﻿{
+  "name": "gh-pr",
+  "issuer": "https://token.actions.githubusercontent.com",
+  "subject": "repo:JoseCorreaV/DevSecOpsTest:pull_request",
+  "audiences": [
+    "api://AzureADTokenExchange"
+  ]
+}

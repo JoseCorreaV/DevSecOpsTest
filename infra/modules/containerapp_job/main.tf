@@ -1,8 +1,5 @@
 data "azurerm_client_config" "current" {}
 
-# Roles para que la UAMI pueda:
-# - PULL en ACR
-# - Leer secretos en KeyVault
 resource "azurerm_role_assignment" "acr_pull" {
   scope                = var.acr_id
   role_definition_name = "AcrPull"
@@ -10,7 +7,7 @@ resource "azurerm_role_assignment" "acr_pull" {
 
   name = uuidv5(
     "6ba7b811-9dad-11d1-80b4-00c04fd430c8",
-    "${var.acr_id}|AcrPull|${var.identity_principal_id}"
+    "${var.acr_id}|AcrPull|job|${var.identity_principal_id}"
   )
 }
 
@@ -21,75 +18,95 @@ resource "azurerm_role_assignment" "kv_secrets_user" {
 
   name = uuidv5(
     "6ba7b811-9dad-11d1-80b4-00c04fd430c8",
-    "${var.keyvault_id}|Key Vault Secrets User|${var.identity_principal_id}"
+    "${var.keyvault_id}|Key Vault Secrets User|job|${var.identity_principal_id}"
   )
-
-  skip_service_principal_aad_check = true
 }
 
-resource "azapi_resource" "job" {
-  type      = "Microsoft.App/jobs@2023-05-01"
-  name      = "${var.prefix}job"
-  location  = var.location
-  parent_id = "/subscriptions/${data.azurerm_client_config.current.subscription_id}/resourceGroups/${var.resource_group_name}"
+locals {
+  raw_prefix = lower(var.prefix)
 
-  schema_validation_enabled = false
+  s1 = replace(local.raw_prefix, "_", "-")
+  s2 = replace(local.s1, " ", "-")
+  s3 = replace(local.s2, ".", "-")
+  s4 = replace(local.s3, "/", "-")
+  s5 = replace(local.s4, "\\", "-")
+  s6 = replace(local.s5, ":", "-")
+  s7 = replace(local.s6, "@", "-")
+
+  c1 = replace(local.s7, "--", "-")
+  c2 = replace(local.c1, "--", "-")
+  c3 = replace(local.c2, "--", "-")
+  c4 = replace(local.c3, "--", "-")
+  c5 = replace(local.c4, "--", "-")
+
+  base_cut  = substr(local.c5, 0, 28)
+  last_char = substr(local.base_cut, length(local.base_cut) - 1, 1)
+  base_ok   = local.last_char == "-" ? "${local.base_cut}x" : local.base_cut
+
+  first_char = substr(local.base_ok, 0, 1)
+  prefix_ok  = contains(["a","b","c","d","e","f","g","h","i","j","k","l","m","n","o","p","q","r","s","t","u","v","w","x","y","z"], local.first_char) ? local.base_ok : "a-${local.base_ok}"
+
+  job_name = "${local.prefix_ok}-job"
+
+  job_name_final_1 = replace(local.job_name, "--", "-")
+  job_name_final_2 = replace(local.job_name_final_1, "--", "-")
+  job_name_final_3 = replace(local.job_name_final_2, "--", "-")
+  job_name_final   = local.job_name_final_3
+}
+
+resource "azurerm_container_app_job" "this" {
+  name                         = local.job_name_final
+  location                     = var.location
+  resource_group_name          = var.resource_group_name
+  container_app_environment_id = var.environment_id
+
+  replica_timeout_in_seconds = 1800
+  replica_retry_limit        = 1
 
   identity {
     type         = "UserAssigned"
     identity_ids = [var.identity_id]
   }
 
-  body = {
-    properties = {
-      environmentId = var.environment_id
+  registry {
+    server   = var.acr_login_server
+    identity = var.identity_id
+  }
 
-      configuration = {
-        triggerType       = "Manual"
-        replicaRetryLimit = 0
-        replicaTimeout    = 300
+  secret {
+    name                = "my-secret"
+    identity            = var.identity_id
+    key_vault_secret_id = var.keyvault_secret_id
+  }
 
-        registries = [
-          {
-            server   = var.acr_login_server
-            identity = var.identity_id
-          }
-        ]
-
-        secrets = [
-          {
-            name        = "my-secret"
-            keyVaultUrl = var.keyvault_secret_id
-            identity    = var.identity_id
-          }
-        ]
-      }
-
-      template = {
-        containers = [
-          {
-            name  = "job"
-            image = "${var.acr_login_server}/${var.job_image_name}:${var.job_image_tag}"
-
-            env = [
-              {
-                name      = "MY_SECRET"
-                secretRef = "my-secret"
-              }
-            ]
-
-            resources = {
-              cpu    = 0.25
-              memory = "0.5Gi"
-            }
-          }
-        ]
-      }
+  dynamic "manual_trigger_config" {
+    for_each = lower(var.trigger_type) == "manual" ? [1] : []
+    content {
+      parallelism              = 1
+      replica_completion_count = 1
     }
   }
 
-  depends_on = [
-    azurerm_role_assignment.acr_pull,
-    azurerm_role_assignment.kv_secrets_user
-  ]
+  dynamic "schedule_trigger_config" {
+    for_each = lower(var.trigger_type) == "schedule" ? [1] : []
+    content {
+      cron_expression          = var.cron_expression
+      parallelism              = 1
+      replica_completion_count = 1
+    }
+  }
+
+  template {
+    container {
+      name   = "job"
+      image  = "${var.acr_login_server}/${var.job_image_name}:${var.job_image_tag}"
+      cpu    = 0.25
+      memory = "0.5Gi"
+
+      env {
+        name        = "MY_SECRET"
+        secret_name = "my-secret"
+      }
+    }
+  }
 }
