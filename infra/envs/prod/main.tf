@@ -25,7 +25,11 @@ provider "azurerm" {
 
 provider "azapi" {}
 
-
+# Normaliza el prefix para que Azure no reviente por nombres inválidos:
+# - solo minúsculas
+# - evita "--"
+# - evita terminar en "-"
+# - recorta longitud para dejar espacio a sufijos (-cae/-api/-job/-kv/-acr)
 locals {
   raw_prefix = lower(var.prefix)
 
@@ -44,14 +48,15 @@ locals {
   c3 = replace(local.c2, "--", "-")
   c4 = replace(local.c3, "--", "-")
 
-  # si termina en "-", QUÍTALO (no agregues nada)
-  last_char = substr(local.c4, length(local.c4) - 1, 1)
-  trimmed   = local.last_char == "-" ? substr(local.c4, 0, length(local.c4) - 1) : local.c4
+  # recorta longitud
+  cut = substr(local.c4, 0, 24)
 
-  # recorta longitud por safety
-  prefix = substr(local.trimmed, 0, 24)
+  # si termina en "-", agrega "x" para terminar en alfanumérico
+  last_char  = substr(local.cut, length(local.cut) - 1, 1)
+  prefix_fix = local.last_char == "-" ? "${local.cut}x" : local.cut
+
+  prefix = local.prefix_fix
 }
-
 
 module "acr" {
   source              = "../../modules/acr"
@@ -121,4 +126,8 @@ module "job" {
 
   job_image_name = var.job_image_name
   job_image_tag  = var.job_image_tag
+
+  # si tu módulo lo soporta (si no, bórralos)
+  trigger_type    = var.trigger_type
+  cron_expression = var.cron_expression
 }
