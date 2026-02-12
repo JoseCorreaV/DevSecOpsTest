@@ -22,8 +22,22 @@ resource "azurerm_role_assignment" "kv_secrets_user" {
   )
 }
 
+locals {
+  raw_prefix = lower(var.prefix)
+
+  cleaned_prefix = regexreplace(local.raw_prefix, "[^a-z0-9-]", "-")
+  no_double_dash = regexreplace(local.cleaned_prefix, "-{2,}", "-")
+  starts_ok      = can(regex("^([a-z]).*$", local.no_double_dash)) ? local.no_double_dash : "a-${local.no_double_dash}"
+  trimmed        = regexreplace(local.starts_ok, "-+$", "")
+
+  # Reserva espacio para "-job" (4 chars)
+  safe_prefix = substr(local.trimmed, 0, 28)
+  job_name    = "${local.safe_prefix}-job"
+}
+
+
 resource "azurerm_container_app_job" "this" {
-  name                         = "${var.prefix}-job"
+  name                         = local.job_name
   location                     = var.location
   resource_group_name          = var.resource_group_name
   container_app_environment_id = var.environment_id
