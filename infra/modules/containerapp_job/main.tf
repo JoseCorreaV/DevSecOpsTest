@@ -25,20 +25,37 @@ resource "azurerm_role_assignment" "kv_secrets_user" {
 locals {
   raw_prefix = lower(var.prefix)
 
-  # Colapsar múltiples --
-  no_double_dash_1 = replace(local.raw_prefix, "--", "-")
-  no_double_dash_2 = replace(local.no_double_dash_1, "--", "-")
-  no_double_dash_3 = replace(local.no_double_dash_2, "--", "-")
-  no_double_dash_4 = replace(local.no_double_dash_3, "--", "-")
+  s1 = replace(local.raw_prefix, "_", "-")
+  s2 = replace(local.s1, " ", "-")
+  s3 = replace(local.s2, ".", "-")
+  s4 = replace(local.s3, "/", "-")
+  s5 = replace(local.s4, "\\", "-")
+  s6 = replace(local.s5, ":", "-")
+  s7 = replace(local.s6, "@", "-")
 
-  # Cortar para dejar espacio a "-job"
-  safe_prefix = substr(local.no_double_dash_4, 0, 28)
+  c1 = replace(local.s7, "--", "-")
+  c2 = replace(local.c1, "--", "-")
+  c3 = replace(local.c2, "--", "-")
+  c4 = replace(local.c3, "--", "-")
+  c5 = replace(local.c4, "--", "-")
 
-  job_name = "${local.safe_prefix}-job"
+  base_cut  = substr(local.c5, 0, 28)
+  last_char = substr(local.base_cut, length(local.base_cut) - 1, 1)
+  base_ok   = local.last_char == "-" ? "${local.base_cut}x" : local.base_cut
+
+  first_char = substr(local.base_ok, 0, 1)
+  prefix_ok  = contains(["a","b","c","d","e","f","g","h","i","j","k","l","m","n","o","p","q","r","s","t","u","v","w","x","y","z"], local.first_char) ? local.base_ok : "a-${local.base_ok}"
+
+  job_name = "${local.prefix_ok}-job"
+
+  job_name_final_1 = replace(local.job_name, "--", "-")
+  job_name_final_2 = replace(local.job_name_final_1, "--", "-")
+  job_name_final_3 = replace(local.job_name_final_2, "--", "-")
+  job_name_final   = local.job_name_final_3
 }
 
 resource "azurerm_container_app_job" "this" {
-  name                         = local.job_name
+  name                         = local.job_name_final
   location                     = var.location
   resource_group_name          = var.resource_group_name
   container_app_environment_id = var.environment_id
