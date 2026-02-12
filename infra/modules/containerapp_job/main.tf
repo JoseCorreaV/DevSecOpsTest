@@ -27,6 +27,9 @@ resource "azurerm_container_app_job" "this" {
   location                     = var.location
   resource_group_name          = var.resource_group_name
   container_app_environment_id = var.environment_id
+  replica_timeout_in_seconds   = 1800
+  replica_retry_limit          = 1
+
 
   identity {
     type         = "UserAssigned"
@@ -42,12 +45,6 @@ resource "azurerm_container_app_job" "this" {
     name                = "my-secret"
     identity            = var.identity_id
     key_vault_secret_id = var.keyvault_secret_id
-  }
-
-  configuration {
-    trigger_type               = var.trigger_type
-    replica_timeout_in_seconds = 1800
-    replica_retry_limit        = 0
   }
   
   template {
