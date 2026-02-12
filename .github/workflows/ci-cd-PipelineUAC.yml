@@ -82,10 +82,29 @@ jobs:
         shell: bash
         run: |
           set -euo pipefail
+
+          # Branch destino para PR, branch actual para push
           if [ "${{ github.event_name }}" = "pull_request" ]; then
-            TFSTATE_KEY="${{ env.ENV_NAME }}/pr-${{ github.event.pull_request.number }}.tfstate"
+            TARGET_BRANCH="${{ github.base_ref }}"
           else
-            TFSTATE_KEY="${{ env.ENV_NAME }}/${{ github.ref_name }}.tfstate"
+            TARGET_BRANCH="${{ github.ref_name }}"
+          fi
+
+          # KEY por ambiente SIN romper el develop existente
+          if [ "${{ github.event_name }}" = "pull_request" ]; then
+            # PRs siempre usan state temporal
+            if [ "$TARGET_BRANCH" = "main" ]; then
+              TFSTATE_KEY="prod/pr-${{ github.event.pull_request.number }}.tfstate"
+            else
+              TFSTATE_KEY="pr-${{ github.event.pull_request.number }}.tfstate"
+            fi
+          else
+            # push directo
+            if [ "$TARGET_BRANCH" = "main" ]; then
+              TFSTATE_KEY="prod/main.tfstate"
+            else
+              TFSTATE_KEY="develop.tfstate"
+            fi
           fi
 
           echo "TFSTATE_KEY=$TFSTATE_KEY" >> "$GITHUB_ENV"
