@@ -25,25 +25,26 @@ resource "azurerm_role_assignment" "kv_secrets_user" {
 locals {
   raw_prefix = lower(var.prefix)
 
+  # Colapsar múltiples --
   no_double_dash_1 = replace(local.raw_prefix, "--", "-")
   no_double_dash_2 = replace(local.no_double_dash_1, "--", "-")
   no_double_dash_3 = replace(local.no_double_dash_2, "--", "-")
   no_double_dash_4 = replace(local.no_double_dash_3, "--", "-")
 
+  # Cortar para dejar espacio a "-job"
   safe_prefix = substr(local.no_double_dash_4, 0, 28)
 
   job_name = "${local.safe_prefix}-job"
 }
-
 
 resource "azurerm_container_app_job" "this" {
   name                         = local.job_name
   location                     = var.location
   resource_group_name          = var.resource_group_name
   container_app_environment_id = var.environment_id
-  replica_timeout_in_seconds   = 1800
-  replica_retry_limit          = 1
 
+  replica_timeout_in_seconds = 1800
+  replica_retry_limit        = 1
 
   identity {
     type         = "UserAssigned"
@@ -77,7 +78,7 @@ resource "azurerm_container_app_job" "this" {
       replica_completion_count = 1
     }
   }
-  
+
   template {
     container {
       name   = "job"
