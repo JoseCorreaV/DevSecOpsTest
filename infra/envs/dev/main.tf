@@ -25,30 +25,53 @@ provider "azurerm" {
 
 provider "azapi" {}
 
+# Sanitiza prefix para cumplir naming de Azure y evitar "--"
+locals {
+  raw_prefix = lower(var.prefix)
+
+  # reemplaza separadores comunes por "-"
+  s1 = replace(local.raw_prefix, "_", "-")
+  s2 = replace(local.s1, " ", "-")
+  s3 = replace(local.s2, ".", "-")
+  s4 = replace(local.s3, "/", "-")
+  s5 = replace(local.s4, "\\", "-")
+  s6 = replace(local.s5, ":", "-")
+  s7 = replace(local.s6, "@", "-")
+
+  # colapsa múltiples "--"
+  c1 = replace(local.s7, "--", "-")
+  c2 = replace(local.c1, "--", "-")
+  c3 = replace(local.c2, "--", "-")
+  c4 = replace(local.c3, "--", "-")
+
+  # recorta para no pasarte en recursos que tienen límites estrictos
+  prefix = substr(local.c4, 0, 24)
+}
+
 module "acr" {
   source              = "../../modules/acr"
-  prefix              = var.prefix
+  prefix              = local.prefix
   location            = var.location
   resource_group_name = var.resource_group_name
 }
 
 module "cae" {
   source              = "../../modules/containerapps_env"
-  prefix              = var.prefix
+  prefix              = local.prefix
   location            = var.location
   resource_group_name = var.resource_group_name
 }
 
 module "identity" {
   source              = "../../modules/identity"
-  prefix              = var.prefix
+  prefix              = local.prefix
   location            = var.location
   resource_group_name = var.resource_group_name
 }
 
 module "keyvault" {
   source              = "../../modules/keyvault"
-  prefix              = var.prefix
+  prefix              = local.prefix
   location            = var.location
   resource_group_name = var.resource_group_name
 
@@ -57,7 +80,7 @@ module "keyvault" {
 
 module "api" {
   source              = "../../modules/containerapp_api"
-  prefix              = var.prefix
+  prefix              = local.prefix
   location            = var.location
   resource_group_name = var.resource_group_name
 
@@ -77,7 +100,7 @@ module "api" {
 
 module "job" {
   source              = "../../modules/containerapp_job"
-  prefix              = var.prefix
+  prefix              = local.prefix
   location            = var.location
   resource_group_name = var.resource_group_name
 
