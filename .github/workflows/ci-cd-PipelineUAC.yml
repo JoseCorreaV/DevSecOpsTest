@@ -77,7 +77,7 @@ jobs:
           terraform_wrapper: false
 
       # PR -> pr-<num>.tfstate
-      # push -> <branch>.tfstate
+      # push -> <branch>.tfstate (develop.tfstate / main.tfstate)
       - name: Set TFSTATE key
         shell: bash
         run: |
@@ -116,6 +116,14 @@ jobs:
           ARM_CLIENT_ID: ${{ secrets.AZURE_CLIENT_ID }}
           ARM_TENANT_ID: ${{ secrets.AZURE_TENANT_ID }}
           ARM_SUBSCRIPTION_ID: ${{ secrets.AZURE_SUBSCRIPTION_ID }}
+
+          # Variables base del entorno
+          TF_VAR_prefix: ${{ env.TF_VAR_prefix }}
+          TF_VAR_resource_group_name: ${{ env.TF_VAR_resource_group_name }}
+          TF_VAR_location: ${{ env.TF_VAR_location }}
+          TF_VAR_my_secret_value: ${{ env.TF_VAR_my_secret_value }}
+
+          # Imágenes
           TF_VAR_app_image_name: ${{ env.APP_IMAGE_NAME }}
           TF_VAR_job_image_name: ${{ env.JOB_IMAGE_NAME }}
           TF_VAR_app_image_tag: ${{ github.sha }}
@@ -190,7 +198,7 @@ jobs:
       # Push a ACR (solo push a develop/main)
       - name: ACR login
         if: github.event_name == 'push' && (github.ref_name == 'develop' || github.ref_name == 'main')
-        run: az acr login --name ${{ env.ACR_NAME }}
+        run: az acr login --name "${{ env.ACR_NAME }}"
 
       - name: Tag & Push images to ACR
         if: github.event_name == 'push' && (github.ref_name == 'develop' || github.ref_name == 'main')
@@ -214,6 +222,14 @@ jobs:
           ARM_CLIENT_ID: ${{ secrets.AZURE_CLIENT_ID }}
           ARM_TENANT_ID: ${{ secrets.AZURE_TENANT_ID }}
           ARM_SUBSCRIPTION_ID: ${{ secrets.AZURE_SUBSCRIPTION_ID }}
+
+          # Variables base del entorno
+          TF_VAR_prefix: ${{ env.TF_VAR_prefix }}
+          TF_VAR_resource_group_name: ${{ env.TF_VAR_resource_group_name }}
+          TF_VAR_location: ${{ env.TF_VAR_location }}
+          TF_VAR_my_secret_value: ${{ env.TF_VAR_my_secret_value }}
+
+          # Imágenes
           TF_VAR_app_image_name: ${{ env.APP_IMAGE_NAME }}
           TF_VAR_job_image_name: ${{ env.JOB_IMAGE_NAME }}
           TF_VAR_app_image_tag: ${{ github.sha }}
