@@ -48,7 +48,7 @@ locals {
   last_char = substr(local.c4, length(local.c4) - 1, 1)
   trimmed   = local.last_char == "-" ? substr(local.c4, 0, length(local.c4) - 1) : local.c4
 
-  # recorta longitud para safety
+  # recorta longitud por safety
   prefix = substr(local.trimmed, 0, 24)
 }
 
