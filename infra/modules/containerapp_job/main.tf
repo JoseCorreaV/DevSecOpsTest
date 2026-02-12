@@ -25,14 +25,14 @@ resource "azurerm_role_assignment" "kv_secrets_user" {
 locals {
   raw_prefix = lower(var.prefix)
 
-  cleaned_prefix = regexreplace(local.raw_prefix, "[^a-z0-9-]", "-")
-  no_double_dash = regexreplace(local.cleaned_prefix, "-{2,}", "-")
-  starts_ok      = can(regex("^([a-z]).*$", local.no_double_dash)) ? local.no_double_dash : "a-${local.no_double_dash}"
-  trimmed        = regexreplace(local.starts_ok, "-+$", "")
+  no_double_dash_1 = replace(local.raw_prefix, "--", "-")
+  no_double_dash_2 = replace(local.no_double_dash_1, "--", "-")
+  no_double_dash_3 = replace(local.no_double_dash_2, "--", "-")
+  no_double_dash_4 = replace(local.no_double_dash_3, "--", "-")
 
-  # Reserva espacio para "-job" (4 chars)
-  safe_prefix = substr(local.trimmed, 0, 28)
-  job_name    = "${local.safe_prefix}-job"
+  safe_prefix = substr(local.no_double_dash_4, 0, 28)
+
+  job_name = "${local.safe_prefix}-job"
 }
 
 
