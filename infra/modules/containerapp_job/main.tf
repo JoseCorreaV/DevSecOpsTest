@@ -1,8 +1,5 @@
 data "azurerm_client_config" "current" {}
 
-# Roles para que la UAMI pueda:
-# - PULL en ACR
-# - Leer secretos en KeyVault
 resource "azurerm_role_assignment" "acr_pull" {
   scope                = var.acr_id
   role_definition_name = "AcrPull"
@@ -29,14 +26,26 @@ resource "azurerm_container_app_job" "this" {
   name                         = "${var.prefix}-job"
   location                     = var.location
   resource_group_name          = var.resource_group_name
-  container_app_environment_id = var.cae_environment_id
+  container_app_environment_id = var.environment_id
 
   identity {
     type         = "UserAssigned"
     identity_ids = [var.identity_id]
   }
 
-  trigger_type = "Manual"
+  trigger_type = var.trigger_type
+
+  registry {
+    server   = var.acr_login_server
+    identity = var.identity_id
+  }
+
+  # (Opcional) mismo secreto disponible para el job
+  secret {
+    name                = "my-secret"
+    identity            = var.identity_id
+    key_vault_secret_id = var.keyvault_secret_id
+  }
 
   template {
     container {
@@ -44,6 +53,11 @@ resource "azurerm_container_app_job" "this" {
       image  = "${var.acr_login_server}/${var.job_image_name}:${var.job_image_tag}"
       cpu    = 0.25
       memory = "0.5Gi"
+
+      env {
+        name        = "MY_SECRET"
+        secret_name = "my-secret"
+      }
     }
   }
 }
