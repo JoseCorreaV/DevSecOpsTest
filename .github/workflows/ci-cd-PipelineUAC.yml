@@ -83,10 +83,11 @@ jobs:
         run: |
           set -euo pipefail
           if [ "${{ github.event_name }}" = "pull_request" ]; then
-            TFSTATE_KEY="pr-${{ github.event.pull_request.number }}.tfstate"
+            TFSTATE_KEY="${{ env.ENV_NAME }}/pr-${{ github.event.pull_request.number }}.tfstate"
           else
-            TFSTATE_KEY="${{ github.ref_name }}.tfstate"
+            TFSTATE_KEY="${{ env.ENV_NAME }}/${{ github.ref_name }}.tfstate"
           fi
+
           echo "TFSTATE_KEY=$TFSTATE_KEY" >> "$GITHUB_ENV"
           echo "TFSTATE_KEY=$TFSTATE_KEY"
 
