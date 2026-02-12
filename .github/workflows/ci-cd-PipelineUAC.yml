@@ -1,0 +1,237 @@
+name: CI-CD
+
+on:
+  push:
+    branches:
+      - develop
+      - main
+  pull_request:
+    branches: [develop, main]
+  workflow_dispatch: {}
+
+concurrency:
+  group: ci-${{ github.workflow }}-${{ github.ref }}
+  cancel-in-progress: true
+
+permissions:
+  id-token: write
+  contents: read
+  security-events: write
+
+env:
+  APP_IMAGE_NAME: techflow-api
+  JOB_IMAGE_NAME: techflow-job
+
+jobs:
+  build-security-deploy:
+    runs-on: ubuntu-latest
+
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Decide environment (dev/prod) and TF_DIR
+        shell: bash
+        run: |
+          set -euo pipefail
+
+          # Para PR usamos la rama destino (base_ref). Para push usamos ref_name.
+          if [ "${{ github.event_name }}" = "pull_request" ]; then
+            TARGET_BRANCH="${{ github.base_ref }}"
+          else
+            TARGET_BRANCH="${{ github.ref_name }}"
+          fi
+
+          if [ "$TARGET_BRANCH" = "main" ]; then
+            echo "ENV_NAME=prod" >> "$GITHUB_ENV"
+            echo "TF_DIR=./infra/envs/prod" >> "$GITHUB_ENV"
+            echo "ACR_NAME=${{ vars.ACR_NAME_PROD }}" >> "$GITHUB_ENV"
+            echo "TF_VAR_prefix=${{ vars.PREFIX_PROD }}" >> "$GITHUB_ENV"
+            echo "TF_VAR_resource_group_name=${{ vars.RG_PROD }}" >> "$GITHUB_ENV"
+            echo "TF_VAR_location=${{ vars.LOCATION_PROD }}" >> "$GITHUB_ENV"
+            echo "TF_VAR_my_secret_value=${{ secrets.MY_SECRET_VALUE_PROD }}" >> "$GITHUB_ENV"
+          else
+            echo "ENV_NAME=dev" >> "$GITHUB_ENV"
+            echo "TF_DIR=./infra/envs/dev" >> "$GITHUB_ENV"
+            echo "ACR_NAME=${{ vars.ACR_NAME_DEV }}" >> "$GITHUB_ENV"
+            echo "TF_VAR_prefix=${{ vars.PREFIX_DEV }}" >> "$GITHUB_ENV"
+            echo "TF_VAR_resource_group_name=${{ vars.RG_DEV }}" >> "$GITHUB_ENV"
+            echo "TF_VAR_location=${{ vars.LOCATION_DEV }}" >> "$GITHUB_ENV"
+            echo "TF_VAR_my_secret_value=${{ secrets.MY_SECRET_VALUE_DEV }}" >> "$GITHUB_ENV"
+          fi
+
+          echo "TARGET_BRANCH=$TARGET_BRANCH"
+          echo "ENV_NAME set to: $(grep ENV_NAME $GITHUB_ENV | cut -d= -f2)"
+          echo "TF_DIR set to: $(grep TF_DIR $GITHUB_ENV | cut -d= -f2)"
+
+      - name: Azure Login (OIDC)
+        uses: azure/login@v2
+        with:
+          client-id: ${{ secrets.AZURE_CLIENT_ID }}
+          tenant-id: ${{ secrets.AZURE_TENANT_ID }}
+          subscription-id: ${{ secrets.AZURE_SUBSCRIPTION_ID }}
+
+      - name: Setup Terraform
+        uses: hashicorp/setup-terraform@v3
+        with:
+          terraform_wrapper: false
+
+      # PR -> pr-<num>.tfstate
+      # push -> <branch>.tfstate (develop.tfstate / main.tfstate)
+      - name: Set TFSTATE key
+        shell: bash
+        run: |
+          set -euo pipefail
+          if [ "${{ github.event_name }}" = "pull_request" ]; then
+            TFSTATE_KEY="pr-${{ github.event.pull_request.number }}.tfstate"
+          else
+            TFSTATE_KEY="${{ github.ref_name }}.tfstate"
+          fi
+          echo "TFSTATE_KEY=$TFSTATE_KEY" >> "$GITHUB_ENV"
+          echo "TFSTATE_KEY=$TFSTATE_KEY"
+
+      - name: Terraform fmt
+        working-directory: ${{ env.TF_DIR }}
+        run: terraform fmt -check -recursive
+
+      - name: Terraform init (remote state using Azure AD)
+        working-directory: ${{ env.TF_DIR }}
+        run: |
+          terraform init \
+            -backend-config="resource_group_name=${{ vars.TFSTATE_RG }}" \
+            -backend-config="storage_account_name=${{ vars.TFSTATE_STORAGE }}" \
+            -backend-config="container_name=${{ vars.TFSTATE_CONTAINER }}" \
+            -backend-config="key=${{ env.TFSTATE_KEY }}" \
+            -backend-config="use_azuread_auth=true"
+
+      - name: Terraform validate
+        working-directory: ${{ env.TF_DIR }}
+        run: terraform validate
+
+      - name: Terraform plan
+        working-directory: ${{ env.TF_DIR }}
+        shell: bash
+        env:
+          ARM_USE_OIDC: true
+          ARM_CLIENT_ID: ${{ secrets.AZURE_CLIENT_ID }}
+          ARM_TENANT_ID: ${{ secrets.AZURE_TENANT_ID }}
+          ARM_SUBSCRIPTION_ID: ${{ secrets.AZURE_SUBSCRIPTION_ID }}
+
+          # Variables base del entorno
+          TF_VAR_prefix: ${{ env.TF_VAR_prefix }}
+          TF_VAR_resource_group_name: ${{ env.TF_VAR_resource_group_name }}
+          TF_VAR_location: ${{ env.TF_VAR_location }}
+          TF_VAR_my_secret_value: ${{ env.TF_VAR_my_secret_value }}
+
+          # Imágenes
+          TF_VAR_app_image_name: ${{ env.APP_IMAGE_NAME }}
+          TF_VAR_job_image_name: ${{ env.JOB_IMAGE_NAME }}
+          TF_VAR_app_image_tag: ${{ github.sha }}
+          TF_VAR_job_image_tag: ${{ github.sha }}
+        run: |
+          set -euo pipefail
+          terraform plan -no-color -compact-warnings
+
+      # IaC scan (Checkov)
+      - name: IaC scan (Checkov)
+        continue-on-error: true
+        uses: bridgecrewio/checkov-action@v12
+        with:
+          directory: ${{ env.TF_DIR }}
+          quiet: true
+          output_format: sarif
+          output_file_path: checkov.sarif
+
+      - name: Upload Checkov SARIF
+        if: github.event_name == 'push' && (github.ref_name == 'develop' || github.ref_name == 'main')
+        continue-on-error: true
+        uses: github/codeql-action/upload-sarif@v3
+        with:
+          sarif_file: checkov.sarif
+
+      # Build imágenes
+      - name: Docker build (api)
+        run: docker build -t ${{ env.APP_IMAGE_NAME }}:${{ github.sha }} ./app
+
+      - name: Docker build (job)
+        run: docker build -t ${{ env.JOB_IMAGE_NAME }}:${{ github.sha }} ./job
+
+      # Trivy scan
+      - name: Trivy scan (api)
+        continue-on-error: true
+        uses: aquasecurity/trivy-action@0.24.0
+        with:
+          image-ref: ${{ env.APP_IMAGE_NAME }}:${{ github.sha }}
+          scan-type: image
+          format: sarif
+          output: trivy-api.sarif
+          vuln-type: os,library
+          severity: CRITICAL,HIGH
+          exit-code: "0"
+
+      - name: Upload Trivy SARIF (api)
+        if: always()
+        continue-on-error: true
+        uses: github/codeql-action/upload-sarif@v3
+        with:
+          sarif_file: trivy-api.sarif
+
+      - name: Trivy scan (job)
+        continue-on-error: true
+        uses: aquasecurity/trivy-action@0.24.0
+        with:
+          image-ref: ${{ env.JOB_IMAGE_NAME }}:${{ github.sha }}
+          scan-type: image
+          format: sarif
+          output: trivy-job.sarif
+          vuln-type: os,library
+          severity: CRITICAL,HIGH
+          exit-code: "0"
+
+      - name: Upload Trivy SARIF (job)
+        if: always()
+        continue-on-error: true
+        uses: github/codeql-action/upload-sarif@v3
+        with:
+          sarif_file: trivy-job.sarif
+
+      # Push a ACR (solo push a develop/main)
+      - name: ACR login
+        if: github.event_name == 'push' && (github.ref_name == 'develop' || github.ref_name == 'main')
+        run: az acr login --name "${{ env.ACR_NAME }}"
+
+      - name: Tag & Push images to ACR
+        if: github.event_name == 'push' && (github.ref_name == 'develop' || github.ref_name == 'main')
+        shell: bash
+        run: |
+          set -euo pipefail
+          ACR_LOGIN_SERVER=$(az acr show -n "${{ env.ACR_NAME }}" --query loginServer -o tsv)
+
+          docker tag ${{ env.APP_IMAGE_NAME }}:${{ github.sha }} $ACR_LOGIN_SERVER/${{ env.APP_IMAGE_NAME }}:${{ github.sha }}
+          docker push $ACR_LOGIN_SERVER/${{ env.APP_IMAGE_NAME }}:${{ github.sha }}
+
+          docker tag ${{ env.JOB_IMAGE_NAME }}:${{ github.sha }} $ACR_LOGIN_SERVER/${{ env.JOB_IMAGE_NAME }}:${{ github.sha }}
+          docker push $ACR_LOGIN_SERVER/${{ env.JOB_IMAGE_NAME }}:${{ github.sha }}
+
+      # Deploy (solo push a develop/main)
+      - name: Terraform apply (deploy)
+        if: github.event_name == 'push' && (github.ref_name == 'develop' || github.ref_name == 'main')
+        working-directory: ${{ env.TF_DIR }}
+        env:
+          ARM_USE_OIDC: true
+          ARM_CLIENT_ID: ${{ secrets.AZURE_CLIENT_ID }}
+          ARM_TENANT_ID: ${{ secrets.AZURE_TENANT_ID }}
+          ARM_SUBSCRIPTION_ID: ${{ secrets.AZURE_SUBSCRIPTION_ID }}
+
+          # Variables base del entorno
+          TF_VAR_prefix: ${{ env.TF_VAR_prefix }}
+          TF_VAR_resource_group_name: ${{ env.TF_VAR_resource_group_name }}
+          TF_VAR_location: ${{ env.TF_VAR_location }}
+          TF_VAR_my_secret_value: ${{ env.TF_VAR_my_secret_value }}
+
+          # Imágenes
+          TF_VAR_app_image_name: ${{ env.APP_IMAGE_NAME }}
+          TF_VAR_job_image_name: ${{ env.JOB_IMAGE_NAME }}
+          TF_VAR_app_image_tag: ${{ github.sha }}
+          TF_VAR_job_image_tag: ${{ github.sha }}
+        run: terraform apply -auto-approve -lock-timeout=5m

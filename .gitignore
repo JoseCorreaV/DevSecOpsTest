@@ -1,0 +1,16 @@
+# Terraform local
+**/.terraform/
+**/.terraform.lock.hcl
+
+# Terraform plan/state local
+*.tfstate
+*.tfstate.*
+*.tfplan
+
+# Local artifacts (evitar fc*.json y github-*.json)
+infra/envs/**/fc*.json
+infra/envs/**/github-*.json
+
+# Crash logs / temp
+crash.log
+*.log

@@ -1,0 +1,8 @@
+﻿{
+  "name": "gh-feature-infra-setup",
+  "issuer": "https://token.actions.githubusercontent.com",
+  "subject": "repo:JoseCorreaV/DevSecOpsTest:ref:refs/heads/feature/infra-setup",
+  "audiences": [
+    "api://AzureADTokenExchange"
+  ]
+}

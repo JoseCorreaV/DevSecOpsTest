@@ -1,0 +1,18 @@
+# === PROD ===
+prefix              = "techflowprod"
+location            = "eastus"
+resource_group_name = "rg-techflow-prod"
+
+app_image_name = "techflow-api"
+job_image_name = "techflow-job"
+
+# En prod ideal: el pipeline lo setea con el SHA del commit
+app_image_tag = "REPLACE_BY_PIPELINE_SHA"
+job_image_tag = "REPLACE_BY_PIPELINE_SHA"
+
+# NO hardcodear en prod real. Déjalo venir de GitHub Secrets
+my_secret_value = "CHANGE_ME"
+
+# opcional si usas schedule en job
+trigger_type    = "manual"
+cron_expression = ""
