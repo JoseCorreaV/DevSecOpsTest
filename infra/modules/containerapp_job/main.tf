@@ -33,20 +33,23 @@ resource "azurerm_container_app_job" "this" {
     identity_ids = [var.identity_id]
   }
 
-  trigger_type = var.trigger_type
-
   registry {
     server   = var.acr_login_server
     identity = var.identity_id
   }
 
-  # (Opcional) mismo secreto disponible para el job
   secret {
     name                = "my-secret"
     identity            = var.identity_id
     key_vault_secret_id = var.keyvault_secret_id
   }
 
+  configuration {
+    trigger_type               = var.trigger_type
+    replica_timeout_in_seconds = 1800
+    replica_retry_limit        = 0
+  }
+  
   template {
     container {
       name   = "job"
