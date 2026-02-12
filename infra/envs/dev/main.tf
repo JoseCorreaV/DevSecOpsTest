@@ -25,30 +25,59 @@ provider "azurerm" {
 
 provider "azapi" {}
 
+locals {
+  raw_prefix = lower(var.prefix)
+
+  # reemplaza separadores comunes por "-"
+  s1 = replace(local.raw_prefix, "_", "-")
+  s2 = replace(local.s1, " ", "-")
+  s3 = replace(local.s2, ".", "-")
+  s4 = replace(local.s3, "/", "-")
+  s5 = replace(local.s4, "\\", "-")
+  s6 = replace(local.s5, ":", "-")
+  s7 = replace(local.s6, "@", "-")
+
+  # colapsa múltiples "--"
+  c1 = replace(local.s7, "--", "-")
+  c2 = replace(local.c1, "--", "-")
+  c3 = replace(local.c2, "--", "-")
+  c4 = replace(local.c3, "--", "-")
+
+  # recorta longitud
+  cut = substr(local.c4, 0, 24)
+
+  # si termina en "-", agrega "x" para que quede alfanumérico al final
+  last_char  = substr(local.cut, length(local.cut) - 1, 1)
+  prefix_fix = local.last_char == "-" ? "${local.cut}x" : local.cut
+
+  prefix = local.prefix_fix
+}
+
+
 module "acr" {
   source              = "../../modules/acr"
-  prefix              = var.prefix
+  prefix              = local.prefix
   location            = var.location
   resource_group_name = var.resource_group_name
 }
 
 module "cae" {
   source              = "../../modules/containerapps_env"
-  prefix              = var.prefix
+  prefix              = local.prefix
   location            = var.location
   resource_group_name = var.resource_group_name
 }
 
 module "identity" {
   source              = "../../modules/identity"
-  prefix              = var.prefix
+  prefix              = local.prefix
   location            = var.location
   resource_group_name = var.resource_group_name
 }
 
 module "keyvault" {
   source              = "../../modules/keyvault"
-  prefix              = var.prefix
+  prefix              = local.prefix
   location            = var.location
   resource_group_name = var.resource_group_name
 
@@ -57,7 +86,7 @@ module "keyvault" {
 
 module "api" {
   source              = "../../modules/containerapp_api"
-  prefix              = var.prefix
+  prefix              = local.prefix
   location            = var.location
   resource_group_name = var.resource_group_name
 
@@ -77,7 +106,7 @@ module "api" {
 
 module "job" {
   source              = "../../modules/containerapp_job"
-  prefix              = var.prefix
+  prefix              = local.prefix
   location            = var.location
   resource_group_name = var.resource_group_name
 
