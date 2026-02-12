@@ -46,6 +46,23 @@ resource "azurerm_container_app_job" "this" {
     identity            = var.identity_id
     key_vault_secret_id = var.keyvault_secret_id
   }
+
+  dynamic "manual_trigger_config" {
+    for_each = lower(var.trigger_type) == "manual" ? [1] : []
+    content {
+      parallelism              = 1
+      replica_completion_count = 1
+    }
+  }
+
+  dynamic "schedule_trigger_config" {
+    for_each = lower(var.trigger_type) == "schedule" ? [1] : []
+    content {
+      cron_expression          = var.cron_expression
+      parallelism              = 1
+      replica_completion_count = 1
+    }
+  }
   
   template {
     container {
