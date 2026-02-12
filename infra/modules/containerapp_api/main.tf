@@ -25,18 +25,17 @@ resource "azurerm_role_assignment" "kv_secrets_user" {
 locals {
   raw_prefix = lower(var.prefix)
 
-  # Colapsa dobles guiones (hazlo varias veces por si vienen triples/cuádruples)
+  # Colapsar múltiples --
   no_double_dash_1 = replace(local.raw_prefix, "--", "-")
   no_double_dash_2 = replace(local.no_double_dash_1, "--", "-")
   no_double_dash_3 = replace(local.no_double_dash_2, "--", "-")
   no_double_dash_4 = replace(local.no_double_dash_3, "--", "-")
 
-  # Reserva 4 caracteres para "-api" y no pases de 32
+  # Cortar para dejar espacio a "-api"
   safe_prefix = substr(local.no_double_dash_4, 0, 28)
 
   app_name = "${local.safe_prefix}-api"
 }
-
 
 resource "azurerm_container_app" "this" {
   name                         = local.app_name
@@ -54,7 +53,6 @@ resource "azurerm_container_app" "this" {
     identity = var.identity_id
   }
 
-  # Secreto proveniente de Key Vault (NO valor plano en TF)
   secret {
     name                = "my-secret"
     identity            = var.identity_id
@@ -64,6 +62,7 @@ resource "azurerm_container_app" "this" {
   ingress {
     external_enabled = true
     target_port      = 3000
+
     traffic_weight {
       latest_revision = true
       percentage      = 100
@@ -90,7 +89,6 @@ resource "azurerm_container_app" "this" {
       cpu    = 0.25
       memory = "0.5Gi"
 
-      # Inyecta el secreto como env var segura
       env {
         name        = "MY_SECRET"
         secret_name = "my-secret"
