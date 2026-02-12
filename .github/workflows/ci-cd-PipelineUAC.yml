@@ -19,8 +19,6 @@ permissions:
   security-events: write
 
 env:
-  # default (se sobreescribe con el step "Set TF_DIR")
-  TF_DIR: ./infra/envs/dev
   APP_IMAGE_NAME: techflow-api
   JOB_IMAGE_NAME: techflow-job
 
@@ -32,25 +30,39 @@ jobs:
       - name: Checkout
         uses: actions/checkout@v4
 
-      # Decide el directorio Terraform según rama/evento:
-      # - PR siempre plan contra DEV (no tocar prod por PR)
-      # - push develop => DEV
-      # - push main    => PROD
-      # - push feature => DEV (solo para plan)
-      - name: Set TF_DIR (dev/prod)
+      - name: Decide environment (dev/prod) and TF_DIR
         shell: bash
         run: |
           set -euo pipefail
+
+          # Para PR usamos la rama destino (base_ref). Para push usamos ref_name.
           if [ "${{ github.event_name }}" = "pull_request" ]; then
-            echo "TF_DIR=./infra/envs/dev" >> "$GITHUB_ENV"
+            TARGET_BRANCH="${{ github.base_ref }}"
           else
-            if [ "${{ github.ref_name }}" = "main" ]; then
-              echo "TF_DIR=./infra/envs/prod" >> "$GITHUB_ENV"
-            else
-              echo "TF_DIR=./infra/envs/dev" >> "$GITHUB_ENV"
-            fi
+            TARGET_BRANCH="${{ github.ref_name }}"
           fi
-          echo "Using TF_DIR=$TF_DIR"
+
+          if [ "$TARGET_BRANCH" = "main" ]; then
+            echo "ENV_NAME=prod" >> "$GITHUB_ENV"
+            echo "TF_DIR=./infra/envs/prod" >> "$GITHUB_ENV"
+            echo "ACR_NAME=${{ vars.ACR_NAME_PROD }}" >> "$GITHUB_ENV"
+            echo "TF_VAR_prefix=${{ vars.PREFIX_PROD }}" >> "$GITHUB_ENV"
+            echo "TF_VAR_resource_group_name=${{ vars.RG_PROD }}" >> "$GITHUB_ENV"
+            echo "TF_VAR_location=${{ vars.LOCATION_PROD }}" >> "$GITHUB_ENV"
+            echo "TF_VAR_my_secret_value=${{ secrets.MY_SECRET_VALUE_PROD }}" >> "$GITHUB_ENV"
+          else
+            echo "ENV_NAME=dev" >> "$GITHUB_ENV"
+            echo "TF_DIR=./infra/envs/dev" >> "$GITHUB_ENV"
+            echo "ACR_NAME=${{ vars.ACR_NAME_DEV }}" >> "$GITHUB_ENV"
+            echo "TF_VAR_prefix=${{ vars.PREFIX_DEV }}" >> "$GITHUB_ENV"
+            echo "TF_VAR_resource_group_name=${{ vars.RG_DEV }}" >> "$GITHUB_ENV"
+            echo "TF_VAR_location=${{ vars.LOCATION_DEV }}" >> "$GITHUB_ENV"
+            echo "TF_VAR_my_secret_value=${{ secrets.MY_SECRET_VALUE_DEV }}" >> "$GITHUB_ENV"
+          fi
+
+          echo "TARGET_BRANCH=$TARGET_BRANCH"
+          echo "ENV_NAME set to: $(grep ENV_NAME $GITHUB_ENV | cut -d= -f2)"
+          echo "TF_DIR set to: $(grep TF_DIR $GITHUB_ENV | cut -d= -f2)"
 
       - name: Azure Login (OIDC)
         uses: azure/login@v2
@@ -65,7 +77,7 @@ jobs:
           terraform_wrapper: false
 
       # PR -> pr-<num>.tfstate
-      # push -> <branch>.tfstate  (develop.tfstate / main.tfstate / feature-....tfstate si quieres)
+      # push -> <branch>.tfstate
       - name: Set TFSTATE key
         shell: bash
         run: |
@@ -96,32 +108,23 @@ jobs:
         working-directory: ${{ env.TF_DIR }}
         run: terraform validate
 
-      # Plan robusto: permite exit 0 y 2; falla solo con 1
-      # OJO: PR a main también planeará contra DEV por seguridad.
       - name: Terraform plan
         working-directory: ${{ env.TF_DIR }}
         shell: bash
         env:
-          TF_VAR_my_secret_value: ${{ secrets.MY_SECRET_VALUE }}
           ARM_USE_OIDC: true
           ARM_CLIENT_ID: ${{ secrets.AZURE_CLIENT_ID }}
           ARM_TENANT_ID: ${{ secrets.AZURE_TENANT_ID }}
           ARM_SUBSCRIPTION_ID: ${{ secrets.AZURE_SUBSCRIPTION_ID }}
+          TF_VAR_app_image_name: ${{ env.APP_IMAGE_NAME }}
+          TF_VAR_job_image_name: ${{ env.JOB_IMAGE_NAME }}
+          TF_VAR_app_image_tag: ${{ github.sha }}
+          TF_VAR_job_image_tag: ${{ github.sha }}
         run: |
           set -euo pipefail
-          set +e
-          terraform plan -detailed-exitcode -no-color -compact-warnings -out=tfplan 2>&1 | tee plan.log
-          code=${PIPESTATUS[0]}
-          set -e
-          echo "terraform plan exit code: $code"
-          if [ "$code" -eq 1 ]; then
-            echo "==== terraform plan FAILED (printing log) ===="
-            tail -n 200 plan.log
-            exit 1
-          fi
-          exit 0
+          terraform plan -no-color -compact-warnings
 
-      # Seguridad IaC (Checkov)
+      # IaC scan (Checkov)
       - name: IaC scan (Checkov)
         continue-on-error: true
         uses: bridgecrewio/checkov-action@v12
@@ -138,18 +141,15 @@ jobs:
         with:
           sarif_file: checkov.sarif
 
-      # Build imágenes SOLO en pushes a develop/main (no PR, no feature)
+      # Build imágenes
       - name: Docker build (api)
-        if: github.event_name == 'push' && (github.ref_name == 'develop' || github.ref_name == 'main')
         run: docker build -t ${{ env.APP_IMAGE_NAME }}:${{ github.sha }} ./app
 
       - name: Docker build (job)
-        if: github.event_name == 'push' && (github.ref_name == 'develop' || github.ref_name == 'main')
         run: docker build -t ${{ env.JOB_IMAGE_NAME }}:${{ github.sha }} ./job
 
-      # Seguridad imágenes (Trivy) solo si se construyeron
+      # Trivy scan
       - name: Trivy scan (api)
-        if: github.event_name == 'push' && (github.ref_name == 'develop' || github.ref_name == 'main')
         continue-on-error: true
         uses: aquasecurity/trivy-action@0.24.0
         with:
@@ -169,7 +169,6 @@ jobs:
           sarif_file: trivy-api.sarif
 
       - name: Trivy scan (job)
-        if: github.event_name == 'push' && (github.ref_name == 'develop' || github.ref_name == 'main')
         continue-on-error: true
         uses: aquasecurity/trivy-action@0.24.0
         with:
@@ -188,17 +187,17 @@ jobs:
         with:
           sarif_file: trivy-job.sarif
 
-      # Push a ACR (solo develop/main)
+      # Push a ACR (solo push a develop/main)
       - name: ACR login
         if: github.event_name == 'push' && (github.ref_name == 'develop' || github.ref_name == 'main')
-        run: az acr login --name ${{ vars.ACR_NAME }}
+        run: az acr login --name ${{ env.ACR_NAME }}
 
       - name: Tag & Push images to ACR
         if: github.event_name == 'push' && (github.ref_name == 'develop' || github.ref_name == 'main')
         shell: bash
         run: |
           set -euo pipefail
-          ACR_LOGIN_SERVER=$(az acr show -n "${{ vars.ACR_NAME }}" --query loginServer -o tsv)
+          ACR_LOGIN_SERVER=$(az acr show -n "${{ env.ACR_NAME }}" --query loginServer -o tsv)
 
           docker tag ${{ env.APP_IMAGE_NAME }}:${{ github.sha }} $ACR_LOGIN_SERVER/${{ env.APP_IMAGE_NAME }}:${{ github.sha }}
           docker push $ACR_LOGIN_SERVER/${{ env.APP_IMAGE_NAME }}:${{ github.sha }}
@@ -206,17 +205,17 @@ jobs:
           docker tag ${{ env.JOB_IMAGE_NAME }}:${{ github.sha }} $ACR_LOGIN_SERVER/${{ env.JOB_IMAGE_NAME }}:${{ github.sha }}
           docker push $ACR_LOGIN_SERVER/${{ env.JOB_IMAGE_NAME }}:${{ github.sha }}
 
-      # Deploy (solo develop/main) usando el TF_DIR correcto:
-      # develop -> dev, main -> prod
+      # Deploy (solo push a develop/main)
       - name: Terraform apply (deploy)
         if: github.event_name == 'push' && (github.ref_name == 'develop' || github.ref_name == 'main')
         working-directory: ${{ env.TF_DIR }}
         env:
-          TF_VAR_app_image_tag: ${{ github.sha }}
-          TF_VAR_job_image_tag: ${{ github.sha }}
-          TF_VAR_my_secret_value: ${{ secrets.MY_SECRET_VALUE }}
           ARM_USE_OIDC: true
           ARM_CLIENT_ID: ${{ secrets.AZURE_CLIENT_ID }}
           ARM_TENANT_ID: ${{ secrets.AZURE_TENANT_ID }}
           ARM_SUBSCRIPTION_ID: ${{ secrets.AZURE_SUBSCRIPTION_ID }}
+          TF_VAR_app_image_name: ${{ env.APP_IMAGE_NAME }}
+          TF_VAR_job_image_name: ${{ env.JOB_IMAGE_NAME }}
+          TF_VAR_app_image_tag: ${{ github.sha }}
+          TF_VAR_job_image_tag: ${{ github.sha }}
         run: terraform apply -auto-approve -lock-timeout=5m
