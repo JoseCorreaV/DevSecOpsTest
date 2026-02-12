@@ -1,17 +1,46 @@
 # DevSecOpsTest – CI/CD + Terraform + Security Scans (Azure Container Apps)
 
-Este repositorio implementa lo solicitado en la prueba:
-- Infraestructura como código (Terraform) en Azure:
-  - Key Vault (secreto de negocio)
-  - Azure Container Registry (ACR)
-  - Container Apps Environment (CAE)
-  - Container App (API) con **init container** y lectura de secreto desde Key Vault via Managed Identity
-  - Container App Job que imprime "Job ejecutado con éxito" y termina
-- Pipeline CI/CD con GitHub Actions:
-  - Build de imágenes Docker (API + Job)
-  - Escaneo IaC (Checkov)
-  - Escaneo de imágenes (Trivy)
-  - Push a ACR y Deploy con Terraform en `develop` y `main`
+Este repositorio implementa una solución DevSecOps completa en Azure utilizando:
+
+- Terraform para Infraestructura como Código.
+- Azure Container Apps para despliegue de API y Job.
+- GitHub Actions para CI/CD.
+- Escaneo automático de seguridad:
+  - Checkov (Infraestructura)
+  - Trivy (Imágenes Docker)
+
+La solución soporta múltiples entornos (`dev` y `prod`) y despliega automáticamente según la rama.
+
+---
+
+# Arquitectura
+
+Por cada entorno (`infra/envs/dev` y `infra/envs/prod`) se despliega:
+
+- Azure Container Registry (ACR)
+- Azure Container Apps Environment (CAE)
+- Azure Key Vault (RBAC habilitado)
+- User Assigned Managed Identity (UAMI)
+- Azure Container App (API)
+  - Usa Managed Identity
+  - Lee secreto desde Key Vault
+  - Incluye init container
+- Azure Container App Job
+  - Ejecuta tarea puntual
+  - Lee secreto desde Key Vault
+
+---
+
+# Flujo de ramas
+
+| Rama        | Qué hace |
+|------------|----------|
+| feature/*  | CI + Plan (sin deploy) |
+| develop    | Deploy automático a DEV |
+| main       | Deploy automático a PROD |
+
+Flujo recomendado:
+
 
 ## Requisitos
 
