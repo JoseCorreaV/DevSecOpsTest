@@ -25,6 +25,7 @@ provider "azurerm" {
 
 provider "azapi" {}
 
+
 locals {
   raw_prefix = lower(var.prefix)
 
@@ -43,14 +44,12 @@ locals {
   c3 = replace(local.c2, "--", "-")
   c4 = replace(local.c3, "--", "-")
 
-  # recorta longitud
-  cut = substr(local.c4, 0, 24)
+  # si termina en "-", QUÍTALO (no agregues nada)
+  last_char = substr(local.c4, length(local.c4) - 1, 1)
+  trimmed   = local.last_char == "-" ? substr(local.c4, 0, length(local.c4) - 1) : local.c4
 
-  # si termina en "-", agrega "x" para que quede alfanumérico al final
-  last_char  = substr(local.cut, length(local.cut) - 1, 1)
-  prefix_fix = local.last_char == "-" ? "${local.cut}x" : local.cut
-
-  prefix = local.prefix_fix
+  # recorta longitud por safety
+  prefix = substr(local.trimmed, 0, 24)
 }
 
 
