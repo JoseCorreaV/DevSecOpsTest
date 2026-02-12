@@ -24,13 +24,25 @@ resource "azurerm_role_assignment" "kv_secrets_user" {
 
 resource "azurerm_container_app" "this" {
   name                         = "${var.prefix}-api"
-  container_app_environment_id = var.cae_environment_id
+  container_app_environment_id = var.environment_id
   resource_group_name          = var.resource_group_name
   revision_mode                = "Single"
 
   identity {
     type         = "UserAssigned"
     identity_ids = [var.identity_id]
+  }
+
+  registry {
+    server   = var.acr_login_server
+    identity = var.identity_id
+  }
+
+  # Secreto proveniente de Key Vault (NO valor plano en TF)
+  secret {
+    name                = "my-secret"
+    identity            = var.identity_id
+    key_vault_secret_id = var.keyvault_secret_id
   }
 
   ingress {
@@ -52,7 +64,7 @@ resource "azurerm_container_app" "this" {
       command = [
         "sh",
         "-lc",
-        "echo \"Iniciando...\""
+        "echo \"Iniciando...\" && sleep 5"
       ]
     }
 
@@ -62,9 +74,10 @@ resource "azurerm_container_app" "this" {
       cpu    = 0.25
       memory = "0.5Gi"
 
+      # Inyecta el secreto como env var segura
       env {
-        name  = "MY_SECRET"
-        value = var.my_secret_value
+        name        = "MY_SECRET"
+        secret_name = "my-secret"
       }
     }
   }
