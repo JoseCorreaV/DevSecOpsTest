@@ -5,10 +5,7 @@ resource "azurerm_role_assignment" "acr_pull" {
   role_definition_name = "AcrPull"
   principal_id         = var.identity_principal_id
 
-  name = uuidv5(
-    "6ba7b811-9dad-11d1-80b4-00c04fd430c8",
-    "${var.acr_id}|AcrPull|api|${var.identity_principal_id}"
-  )
+  name = "fe853f2a-08b4-56c9-848a-641b65f7130f"
 }
 
 resource "azurerm_role_assignment" "kv_secrets_user" {
