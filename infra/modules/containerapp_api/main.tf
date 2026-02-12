@@ -71,8 +71,8 @@ resource "azapi_resource" "api" {
         # INIT CONTAINER (cumple el requisito del doc)
         initContainers = [
           {
-            name  = "init"
-            image = "alpine:3.20"
+            name    = "init"
+            image   = "alpine:3.20"
             command = ["/bin/sh"]
             args    = ["-lc", "echo 'Iniciando...' && sleep 5"]
             resources = {

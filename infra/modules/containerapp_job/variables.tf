@@ -1,14 +1,14 @@
 variable "resource_group_name" { type = string }
-variable "location"            { type = string }
-variable "prefix"              { type = string }
+variable "location" { type = string }
+variable "prefix" { type = string }
 
 variable "environment_id" { type = string }
 
-variable "acr_id"           { type = string }
+variable "acr_id" { type = string }
 variable "acr_login_server" { type = string }
 
 variable "job_image_name" { type = string }
-variable "job_image_tag"  { type = string }
+variable "job_image_tag" { type = string }
 
 variable "trigger_type" {
   type    = string
