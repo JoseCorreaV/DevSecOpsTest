@@ -1,9 +1,17 @@
-resource_group_name = "rg-techflow-dev"
-prefix              = "techflowdev"
+prefix              = "techflowprod"
 location            = "eastus"
-keyvault_name       = "techflowdevkv"
-acr_name            = "techflowdevacr"
+resource_group_name = "rg-techflow-prod"
 
-keyvault_secrets_officer_principal_ids = [
-  "00000000-0000-0000-0000-000000000000"
-]
+app_image_name = "techflow-api"
+job_image_name = "techflow-job"
+
+# en prod ideal: tag = SHA del commit (lo pone el pipeline)
+app_image_tag = "1.0.0"
+job_image_tag = "1.0.0"
+
+# NO lo uses aquí en real. En prod va por GitHub Secrets/Variables.
+my_secret_value = "CHANGE_ME"
+
+# opcional si usas schedule en job
+trigger_type    = "manual"
+cron_expression = ""
