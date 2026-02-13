@@ -98,13 +98,13 @@ jobs:
             if [ "$TARGET_BRANCH" = "main" ]; then
               TFSTATE_KEY="prod/pr-${{ github.event.pull_request.number }}.tfstate"
             else
-              TFSTATE_KEY="pr-${{ github.event.pull_request.number }}.tfstate"
+              TFSTATE_KEY="dev/pr-${{ github.event.pull_request.number }}.tfstate"
             fi
           else
             if [ "$TARGET_BRANCH" = "main" ]; then
               TFSTATE_KEY="prod/main.tfstate"
             else
-              TFSTATE_KEY="develop.tfstate"
+              TFSTATE_KEY="dev/develop.tfstate"
             fi
           fi
 
