@@ -1,6 +1,20 @@
 data "azurerm_client_config" "current" {}
 
-# Solo dejamos KV role aquí (AcrPull se gestiona en el módulo JOB para evitar 409)
+# Permisos necesarios para que la Container App (API) pueda:
+# 1) Hacer pull de la imagen desde ACR usando la Managed Identity
+# 2) Leer el secreto desde Key Vault (RBAC)
+resource "azurerm_role_assignment" "acr_pull" {
+  scope                = var.acr_id
+  role_definition_name = "AcrPull"
+  principal_id         = var.identity_principal_id
+
+  # UUID determinístico (evita duplicados / 409)
+  name = uuidv5(
+    "6ba7b811-9dad-11d1-80b4-00c04fd430c8",
+    "${var.acr_id}|AcrPull|api|${var.identity_principal_id}"
+  )
+}
+
 resource "azurerm_role_assignment" "kv_secrets_user" {
   scope                = var.keyvault_id
   role_definition_name = "Key Vault Secrets User"
