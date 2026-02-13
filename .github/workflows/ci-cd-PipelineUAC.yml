@@ -77,29 +77,25 @@ jobs:
           terraform_wrapper: false
 
       # PR -> pr-<num>.tfstate
-      # push -> <branch>.tfstate (develop.tfstate / main.tfstate)
+      # push -> develop.tfstate / prod/main.tfstate
       - name: Set TFSTATE key
         shell: bash
         run: |
           set -euo pipefail
 
-          # Branch destino para PR, branch actual para push
           if [ "${{ github.event_name }}" = "pull_request" ]; then
             TARGET_BRANCH="${{ github.base_ref }}"
           else
             TARGET_BRANCH="${{ github.ref_name }}"
           fi
 
-          # KEY por ambiente SIN romper el develop existente
           if [ "${{ github.event_name }}" = "pull_request" ]; then
-            # PRs siempre usan state temporal
             if [ "$TARGET_BRANCH" = "main" ]; then
               TFSTATE_KEY="prod/pr-${{ github.event.pull_request.number }}.tfstate"
             else
               TFSTATE_KEY="pr-${{ github.event.pull_request.number }}.tfstate"
             fi
           else
-            # push directo
             if [ "$TARGET_BRANCH" = "main" ]; then
               TFSTATE_KEY="prod/main.tfstate"
             else
@@ -137,13 +133,11 @@ jobs:
           ARM_TENANT_ID: ${{ secrets.AZURE_TENANT_ID }}
           ARM_SUBSCRIPTION_ID: ${{ secrets.AZURE_SUBSCRIPTION_ID }}
 
-          # Variables base del entorno
           TF_VAR_prefix: ${{ env.TF_VAR_prefix }}
           TF_VAR_resource_group_name: ${{ env.TF_VAR_resource_group_name }}
           TF_VAR_location: ${{ env.TF_VAR_location }}
           TF_VAR_my_secret_value: ${{ env.TF_VAR_my_secret_value }}
 
-          # Imágenes
           TF_VAR_app_image_name: ${{ env.APP_IMAGE_NAME }}
           TF_VAR_job_image_name: ${{ env.JOB_IMAGE_NAME }}
           TF_VAR_app_image_tag: ${{ github.sha }}
@@ -152,7 +146,6 @@ jobs:
           set -euo pipefail
           terraform plan -no-color -compact-warnings
 
-      # IaC scan (Checkov)
       - name: IaC scan (Checkov)
         continue-on-error: true
         uses: bridgecrewio/checkov-action@v12
@@ -169,14 +162,12 @@ jobs:
         with:
           sarif_file: checkov.sarif
 
-      # Build imágenes
       - name: Docker build (api)
         run: docker build -t ${{ env.APP_IMAGE_NAME }}:${{ github.sha }} ./app
 
       - name: Docker build (job)
         run: docker build -t ${{ env.JOB_IMAGE_NAME }}:${{ github.sha }} ./job
 
-      # Trivy scan
       - name: Trivy scan (api)
         continue-on-error: true
         uses: aquasecurity/trivy-action@0.24.0
@@ -215,7 +206,6 @@ jobs:
         with:
           sarif_file: trivy-job.sarif
 
-      # Push a ACR (solo push a develop/main)
       - name: ACR login
         if: github.event_name == 'push' && (github.ref_name == 'develop' || github.ref_name == 'main')
         run: az acr login --name "${{ env.ACR_NAME }}"
@@ -233,7 +223,6 @@ jobs:
           docker tag ${{ env.JOB_IMAGE_NAME }}:${{ github.sha }} $ACR_LOGIN_SERVER/${{ env.JOB_IMAGE_NAME }}:${{ github.sha }}
           docker push $ACR_LOGIN_SERVER/${{ env.JOB_IMAGE_NAME }}:${{ github.sha }}
 
-      # Deploy (solo push a develop/main)
       - name: Terraform apply (deploy)
         if: github.event_name == 'push' && (github.ref_name == 'develop' || github.ref_name == 'main')
         working-directory: ${{ env.TF_DIR }}
@@ -243,18 +232,21 @@ jobs:
           ARM_TENANT_ID: ${{ secrets.AZURE_TENANT_ID }}
           ARM_SUBSCRIPTION_ID: ${{ secrets.AZURE_SUBSCRIPTION_ID }}
 
-          # Variables base del entorno
           TF_VAR_prefix: ${{ env.TF_VAR_prefix }}
           TF_VAR_resource_group_name: ${{ env.TF_VAR_resource_group_name }}
           TF_VAR_location: ${{ env.TF_VAR_location }}
           TF_VAR_my_secret_value: ${{ env.TF_VAR_my_secret_value }}
 
-          # Imágenes
           TF_VAR_app_image_name: ${{ env.APP_IMAGE_NAME }}
           TF_VAR_job_image_name: ${{ env.JOB_IMAGE_NAME }}
           TF_VAR_app_image_tag: ${{ github.sha }}
           TF_VAR_job_image_tag: ${{ github.sha }}
         run: |
+          set -euo pipefail
+
+          echo "Trying apply with -replace (recreate app/job)..."
           terraform apply -auto-approve -lock-timeout=5m \
             -replace="module.api.azurerm_container_app.this" \
-            -replace="module.job.azurerm_container_app_job.this"
+            -replace="module.job.azurerm_container_app_job.this" || \
+          (echo "Replace failed (likely first run / not in state). Running normal apply..." && \
+           terraform apply -auto-approve -lock-timeout=5m)
