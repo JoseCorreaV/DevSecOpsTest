@@ -35,7 +35,8 @@ jobs:
         run: |
           set -euo pipefail
 
-          # Para PR usamos la rama destino (base_ref). Para push usamos ref_name.
+          # Para PR: usamos la rama destino (base_ref)
+          # Para push: usamos la rama que se pusheó (ref_name)
           if [ "${{ github.event_name }}" = "pull_request" ]; then
             TARGET_BRANCH="${{ github.base_ref }}"
           else
@@ -45,6 +46,7 @@ jobs:
           if [ "$TARGET_BRANCH" = "main" ]; then
             echo "ENV_NAME=prod" >> "$GITHUB_ENV"
             echo "TF_DIR=./infra/envs/prod" >> "$GITHUB_ENV"
+
             echo "ACR_NAME=${{ vars.ACR_NAME_PROD }}" >> "$GITHUB_ENV"
             echo "TF_VAR_prefix=${{ vars.PREFIX_PROD }}" >> "$GITHUB_ENV"
             echo "TF_VAR_resource_group_name=${{ vars.RG_PROD }}" >> "$GITHUB_ENV"
@@ -53,6 +55,7 @@ jobs:
           else
             echo "ENV_NAME=dev" >> "$GITHUB_ENV"
             echo "TF_DIR=./infra/envs/dev" >> "$GITHUB_ENV"
+
             echo "ACR_NAME=${{ vars.ACR_NAME_DEV }}" >> "$GITHUB_ENV"
             echo "TF_VAR_prefix=${{ vars.PREFIX_DEV }}" >> "$GITHUB_ENV"
             echo "TF_VAR_resource_group_name=${{ vars.RG_DEV }}" >> "$GITHUB_ENV"
@@ -61,8 +64,10 @@ jobs:
           fi
 
           echo "TARGET_BRANCH=$TARGET_BRANCH"
-          echo "ENV_NAME set to: $(grep ENV_NAME $GITHUB_ENV | cut -d= -f2)"
-          echo "TF_DIR set to: $(grep TF_DIR $GITHUB_ENV | cut -d= -f2)"
+          echo "ENV_NAME=$(grep ENV_NAME $GITHUB_ENV | cut -d= -f2)"
+          echo "TF_DIR=$(grep TF_DIR $GITHUB_ENV | cut -d= -f2)"
+          echo "TF_VAR_prefix=$(grep TF_VAR_prefix $GITHUB_ENV | cut -d= -f2)"
+          echo "TF_VAR_resource_group_name=$(grep TF_VAR_resource_group_name $GITHUB_ENV | cut -d= -f2)"
 
       - name: Azure Login (OIDC)
         uses: azure/login@v2
@@ -93,13 +98,13 @@ jobs:
             if [ "$TARGET_BRANCH" = "main" ]; then
               TFSTATE_KEY="prod/pr-${{ github.event.pull_request.number }}.tfstate"
             else
-              TFSTATE_KEY="pr-${{ github.event.pull_request.number }}.tfstate"
+              TFSTATE_KEY="dev/pr-${{ github.event.pull_request.number }}.tfstate"
             fi
           else
             if [ "$TARGET_BRANCH" = "main" ]; then
               TFSTATE_KEY="prod/main.tfstate"
             else
-              TFSTATE_KEY="develop.tfstate"
+              TFSTATE_KEY="dev/develop.tfstate"
             fi
           fi
 
@@ -109,6 +114,39 @@ jobs:
       - name: Terraform fmt
         working-directory: ${{ env.TF_DIR }}
         run: terraform fmt -check -recursive
+
+      - name: Sanity check env values
+        shell: bash
+        run: |
+          set -euo pipefail
+          echo "ENV_NAME=${ENV_NAME}"
+          echo "TF_DIR=${TF_DIR}"
+          echo "TFSTATE_KEY=${TFSTATE_KEY}"
+          echo "TF_VAR_prefix=${TF_VAR_prefix}"
+          echo "TF_VAR_resource_group_name=${TF_VAR_resource_group_name}"
+
+          if [ "${ENV_NAME}" = "dev" ]; then
+            if [[ "${TF_VAR_prefix}" != *"dev"* ]]; then
+              echo "ERROR: dev env but prefix does not look like dev."
+              exit 1
+            fi
+            if [[ "${TF_VAR_resource_group_name}" != *"-dev"* ]]; then
+              echo "ERROR: dev env but RG does not look like dev."
+              exit 1
+            fi
+          fi
+
+          if [ "${ENV_NAME}" = "prod" ]; then
+            if [[ "${TF_VAR_prefix}" != *"prod"* ]]; then
+              echo "ERROR: prod env but prefix does not look like prod."
+              exit 1
+            fi
+            if [[ "${TF_VAR_resource_group_name}" != *"-prod"* ]]; then
+              echo "ERROR: prod env but RG does not look like prod."
+              exit 1
+            fi
+          fi
+
 
       - name: Terraform init (remote state using Azure AD)
         working-directory: ${{ env.TF_DIR }}
