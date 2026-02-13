@@ -31,5 +31,5 @@ output "secret_versionless_id" {
 }
 
 output "keyvault_name" {
-  value = var.keyvault_name
+  value = module.keyvault.key_vault_name
 }
