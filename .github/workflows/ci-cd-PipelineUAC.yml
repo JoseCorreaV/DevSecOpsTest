@@ -254,4 +254,7 @@ jobs:
           TF_VAR_job_image_name: ${{ env.JOB_IMAGE_NAME }}
           TF_VAR_app_image_tag: ${{ github.sha }}
           TF_VAR_job_image_tag: ${{ github.sha }}
-        run: terraform apply -auto-approve -lock-timeout=5m
+        run: |
+          terraform apply -auto-approve -lock-timeout=5m \
+            -replace="module.api.azurerm_container_app.this" \
+            -replace="module.job.azurerm_container_app_job.this"
