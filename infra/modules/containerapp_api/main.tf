@@ -12,6 +12,18 @@ resource "azurerm_role_assignment" "kv_secrets_user" {
   )
 }
 
+resource "azurerm_role_assignment" "acr_pull" {
+  scope                = var.acr_id
+  role_definition_name = "AcrPull"
+  principal_id         = var.identity_principal_id
+
+  name = uuidv5(
+    "6ba7b811-9dad-11d1-80b4-00c04fd430c8",
+    "${var.acr_id}|AcrPull|api|${var.identity_principal_id}"
+  )
+}
+
+
 resource "azurerm_container_app" "this" {
   name                         = "${var.prefix}-api"
   container_app_environment_id = var.environment_id
