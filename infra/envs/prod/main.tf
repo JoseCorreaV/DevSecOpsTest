@@ -4,6 +4,7 @@ resource "azurerm_resource_group" "this" {
 
   lifecycle {
     prevent_destroy = true
+    ignore_changes  = [location, tags]
   }
 }
 
