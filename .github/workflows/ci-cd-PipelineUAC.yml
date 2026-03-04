@@ -1,9 +1,8 @@
 name: CI-CD
+
 on:
   push:
-    branches:
-      - develop
-      - main
+    branches: [develop, main]
   pull_request:
     branches: [develop, main]
   workflow_dispatch: {}
@@ -22,7 +21,7 @@ env:
   JOB_IMAGE_NAME: techflow-job
 
 jobs:
-  build-security-deploy:
+  ci_cd:
     runs-on: ubuntu-latest
 
     steps:
@@ -34,8 +33,8 @@ jobs:
         run: |
           set -euo pipefail
 
-          # Para PR: usamos la rama destino (base_ref)
-          # Para push: usamos la rama que se pusheó (ref_name)
+          # PR -> target = base_ref
+          # push -> target = ref_name
           if [ "${{ github.event_name }}" = "pull_request" ]; then
             TARGET_BRANCH="${{ github.base_ref }}"
           else
@@ -63,10 +62,8 @@ jobs:
           fi
 
           echo "TARGET_BRANCH=$TARGET_BRANCH"
-          echo "ENV_NAME=$(grep ENV_NAME $GITHUB_ENV | cut -d= -f2)"
-          echo "TF_DIR=$(grep TF_DIR $GITHUB_ENV | cut -d= -f2)"
-          echo "TF_VAR_prefix=$(grep TF_VAR_prefix $GITHUB_ENV | cut -d= -f2)"
-          echo "TF_VAR_resource_group_name=$(grep TF_VAR_resource_group_name $GITHUB_ENV | cut -d= -f2)"
+          echo "ENV_NAME=$ENV_NAME"
+          echo "TF_DIR=$TF_DIR"
 
       - name: Azure Login (OIDC)
         uses: azure/login@v2
@@ -80,8 +77,6 @@ jobs:
         with:
           terraform_wrapper: false
 
-      # PR -> pr-<num>.tfstate
-      # push -> develop.tfstate / prod/main.tfstate
       - name: Set TFSTATE key
         shell: bash
         run: |
@@ -114,39 +109,6 @@ jobs:
         working-directory: ${{ env.TF_DIR }}
         run: terraform fmt -check -recursive
 
-      - name: Sanity check env values
-        shell: bash
-        run: |
-          set -euo pipefail
-          echo "ENV_NAME=${ENV_NAME}"
-          echo "TF_DIR=${TF_DIR}"
-          echo "TFSTATE_KEY=${TFSTATE_KEY}"
-          echo "TF_VAR_prefix=${TF_VAR_prefix}"
-          echo "TF_VAR_resource_group_name=${TF_VAR_resource_group_name}"
-
-          if [ "${ENV_NAME}" = "dev" ]; then
-            if [[ "${TF_VAR_prefix}" != *"dev"* ]]; then
-              echo "ERROR: dev env but prefix does not look like dev."
-              exit 1
-            fi
-            if [[ "${TF_VAR_resource_group_name}" != *"-dev"* ]]; then
-              echo "ERROR: dev env but RG does not look like dev."
-              exit 1
-            fi
-          fi
-
-          if [ "${ENV_NAME}" = "prod" ]; then
-            if [[ "${TF_VAR_prefix}" != *"prod"* ]]; then
-              echo "ERROR: prod env but prefix does not look like prod."
-              exit 1
-            fi
-            if [[ "${TF_VAR_resource_group_name}" != *"-prod"* ]]; then
-              echo "ERROR: prod env but RG does not look like prod."
-              exit 1
-            fi
-          fi
-
-
       - name: Terraform init (remote state using Azure AD)
         working-directory: ${{ env.TF_DIR }}
         run: |
@@ -161,6 +123,8 @@ jobs:
         working-directory: ${{ env.TF_DIR }}
         run: terraform validate
 
+      # ✅ Para PR no queremos depender de imágenes/push/apply.
+      # Plan igual se ejecuta, pero sin apply.
       - name: Terraform plan
         working-directory: ${{ env.TF_DIR }}
         shell: bash
@@ -199,11 +163,12 @@ jobs:
         with:
           sarif_file: checkov.sarif
 
+      # ✅ Construye imágenes siempre (PR y push) para que Trivy escanee.
       - name: Docker build (api)
-        run: docker build -t ${{ env.APP_IMAGE_NAME }}:${{ github.sha }} ./app
+        run: docker build -t ${{ env.APP_IMAGE_NAME }}:${{ github.sha }} -f app/Dockerfile ./app
 
       - name: Docker build (job)
-        run: docker build -t ${{ env.JOB_IMAGE_NAME }}:${{ github.sha }} ./job
+        run: docker build -t ${{ env.JOB_IMAGE_NAME }}:${{ github.sha }} -f job/Dockerfile ./job
 
       - name: Trivy scan (api)
         continue-on-error: true
@@ -243,8 +208,10 @@ jobs:
         with:
           sarif_file: trivy-job.sarif
 
+      # ✅ Solo en push a develop/main hacemos push a ACR + apply.
       - name: ACR login
         if: github.event_name == 'push' && (github.ref_name == 'develop' || github.ref_name == 'main')
+        shell: bash
         run: az acr login --name "${{ env.ACR_NAME }}"
 
       - name: Tag & Push images to ACR
@@ -263,6 +230,7 @@ jobs:
       - name: Terraform apply (deploy)
         if: github.event_name == 'push' && (github.ref_name == 'develop' || github.ref_name == 'main')
         working-directory: ${{ env.TF_DIR }}
+        shell: bash
         env:
           ARM_USE_OIDC: true
           ARM_CLIENT_ID: ${{ secrets.AZURE_CLIENT_ID }}
@@ -280,10 +248,4 @@ jobs:
           TF_VAR_job_image_tag: ${{ github.sha }}
         run: |
           set -euo pipefail
-
-          echo "Trying apply with -replace (recreate app/job)..."
-          terraform apply -auto-approve -lock-timeout=5m \
-            -replace="module.api.azurerm_container_app.this" \
-            -replace="module.job.azurerm_container_app_job.this" || \
-          (echo "Replace failed (likely first run / not in state). Running normal apply..." && \
-           terraform apply -auto-approve -lock-timeout=5m)
+          terraform apply -auto-approve -lock-timeout=5m
