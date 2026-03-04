@@ -8,7 +8,6 @@ on:
   workflow_dispatch: {}
 
 concurrency:
-  # Evita que un push cancele el run del PR (y viceversa)
   group: ci-${{ github.workflow }}-${{ github.event_name }}-${{ github.ref }}
   cancel-in-progress: true
 
@@ -44,27 +43,27 @@ jobs:
             ENV_NAME="prod"
             TF_DIR="./infra/envs/prod"
 
-            echo "ENV_NAME=$ENV_NAME" >> "$GITHUB_ENV"
-            echo "TF_DIR=$TF_DIR" >> "$GITHUB_ENV"
-
-            echo "ACR_NAME=${{ vars.ACR_NAME_PROD }}" >> "$GITHUB_ENV"
-            echo "TF_VAR_prefix=${{ vars.PREFIX_PROD }}" >> "$GITHUB_ENV"
-            echo "TF_VAR_resource_group_name=${{ vars.RG_PROD }}" >> "$GITHUB_ENV"
-            echo "TF_VAR_location=${{ vars.LOCATION_PROD }}" >> "$GITHUB_ENV"
-
-            # IMPORTANTE: secret SOLO para push (no PR). Lo seteamos luego.
+            ACR_NAME="${{ vars.ACR_NAME_PROD }}"
+            TF_VAR_prefix="${{ vars.PREFIX_PROD }}"
+            TF_VAR_resource_group_name="${{ vars.RG_PROD }}"
+            TF_VAR_location="${{ vars.LOCATION_PROD }}"
           else
             ENV_NAME="dev"
             TF_DIR="./infra/envs/dev"
 
-            echo "ENV_NAME=$ENV_NAME" >> "$GITHUB_ENV"
-            echo "TF_DIR=$TF_DIR" >> "$GITHUB_ENV"
-
-            echo "ACR_NAME=${{ vars.ACR_NAME_DEV }}" >> "$GITHUB_ENV"
-            echo "TF_VAR_prefix=${{ vars.PREFIX_DEV }}" >> "$GITHUB_ENV"
-            echo "TF_VAR_resource_group_name=${{ vars.RG_DEV }}" >> "$GITHUB_ENV"
-            echo "TF_VAR_location=${{ vars.LOCATION_DEV }}" >> "$GITHUB_ENV"
+            ACR_NAME="${{ vars.ACR_NAME_DEV }}"
+            TF_VAR_prefix="${{ vars.PREFIX_DEV }}"
+            TF_VAR_resource_group_name="${{ vars.RG_DEV }}"
+            TF_VAR_location="${{ vars.LOCATION_DEV }}"
           fi
+
+          echo "ENV_NAME=$ENV_NAME" >> "$GITHUB_ENV"
+          echo "TF_DIR=$TF_DIR" >> "$GITHUB_ENV"
+
+          echo "ACR_NAME=$ACR_NAME" >> "$GITHUB_ENV"
+          echo "TF_VAR_prefix=$TF_VAR_prefix" >> "$GITHUB_ENV"
+          echo "TF_VAR_resource_group_name=$TF_VAR_resource_group_name" >> "$GITHUB_ENV"
+          echo "TF_VAR_location=$TF_VAR_location" >> "$GITHUB_ENV"
 
           echo "TARGET_BRANCH=$TARGET_BRANCH"
           echo "ENV_NAME=$ENV_NAME"
@@ -101,7 +100,7 @@ jobs:
             fi
           else
             if [ "$TARGET_BRANCH" = "main" ]; then
-              TFSTATE_KEY="prod/main-eus2.tfstate"
+              TFSTATE_KEY="prod-eus2/main.tfstate"
             else
               TFSTATE_KEY="dev/develop.tfstate"
             fi
@@ -116,6 +115,7 @@ jobs:
 
       - name: Terraform init (remote state using Azure AD)
         working-directory: ${{ env.TF_DIR }}
+        shell: bash
         run: |
           set -euo pipefail
           terraform init \
@@ -129,16 +129,19 @@ jobs:
         working-directory: ${{ env.TF_DIR }}
         run: terraform validate
 
-      # Solo setea el secreto en PUSH (en PR evita 403 por KV/propagación)
-      - name: Set TF secret var (push only)
-        if: github.event_name == 'push' && (github.ref_name == 'develop' || github.ref_name == 'main')
+      # ✅ Secret: en push usa el real, en PR usa dummy para que PLAN no rompa.
+      - name: Set TF secret var
         shell: bash
         run: |
           set -euo pipefail
-          if [ "${{ github.ref_name }}" = "main" ]; then
-            echo "TF_VAR_my_secret_value=${{ secrets.MY_SECRET_VALUE_PROD }}" >> "$GITHUB_ENV"
+          if [ "${{ github.event_name }}" = "push" ]; then
+            if [ "${{ github.ref_name }}" = "main" ]; then
+              echo "TF_VAR_my_secret_value=${{ secrets.MY_SECRET_VALUE_PROD }}" >> "$GITHUB_ENV"
+            else
+              echo "TF_VAR_my_secret_value=${{ secrets.MY_SECRET_VALUE_DEV }}" >> "$GITHUB_ENV"
+            fi
           else
-            echo "TF_VAR_my_secret_value=${{ secrets.MY_SECRET_VALUE_DEV }}" >> "$GITHUB_ENV"
+            echo "TF_VAR_my_secret_value=dummy" >> "$GITHUB_ENV"
           fi
 
       - name: Terraform plan
@@ -153,8 +156,6 @@ jobs:
           TF_VAR_prefix: ${{ env.TF_VAR_prefix }}
           TF_VAR_resource_group_name: ${{ env.TF_VAR_resource_group_name }}
           TF_VAR_location: ${{ env.TF_VAR_location }}
-
-          # En PR quedará vacío (no definido) y evita tocar KV secret
           TF_VAR_my_secret_value: ${{ env.TF_VAR_my_secret_value }}
 
           TF_VAR_app_image_name: ${{ env.APP_IMAGE_NAME }}
@@ -246,6 +247,7 @@ jobs:
       - name: Terraform apply (deploy)
         if: github.event_name == 'push' && (github.ref_name == 'develop' || github.ref_name == 'main')
         working-directory: ${{ env.TF_DIR }}
+        shell: bash
         env:
           ARM_USE_OIDC: true
           ARM_CLIENT_ID: ${{ secrets.AZURE_CLIENT_ID }}
@@ -261,16 +263,6 @@ jobs:
           TF_VAR_job_image_name: ${{ env.JOB_IMAGE_NAME }}
           TF_VAR_app_image_tag: ${{ github.sha }}
           TF_VAR_job_image_tag: ${{ github.sha }}
-        shell: bash
         run: |
           set -euo pipefail
-          if [ "${{ github.ref_name }}" = "main" ]; then
-            echo "MAIN/prod: apply normal (sin -replace)"
-            terraform apply -auto-approve -lock-timeout=5m
-          else
-            echo "DEVELOP/dev: apply con replace (opcional)"
-            terraform apply -auto-approve -lock-timeout=5m \
-              -replace="module.api.azurerm_container_app.this" \
-              -replace="module.job.azurerm_container_app_job.this" || \
-            terraform apply -auto-approve -lock-timeout=5m
-          fi
+          terraform apply -auto-approve -lock-timeout=5m
