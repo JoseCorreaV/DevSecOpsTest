@@ -1,1 +1,3 @@
-#!:contentReference[oaicite:7]{index=7}on éxito"
+#!/bin/sh
+echo "Job ejecutado con éxito"
+exit 0
