@@ -40,22 +40,30 @@ jobs:
           fi
 
           if [ "$TARGET_BRANCH" = "main" ]; then
-            echo "ENV_NAME=prod" >> "$GITHUB_ENV"
-            echo "TF_DIR=./infra/envs/prod" >> "$GITHUB_ENV"
+            ENV_NAME="prod"
+            TF_DIR="./infra/envs/prod"
 
-            echo "ACR_NAME=${{ vars.ACR_NAME_PROD }}" >> "$GITHUB_ENV"
-            echo "TF_VAR_prefix=${{ vars.PREFIX_PROD }}" >> "$GITHUB_ENV"
-            echo "TF_VAR_resource_group_name=${{ vars.RG_PROD }}" >> "$GITHUB_ENV"
-            echo "TF_VAR_location=${{ vars.LOCATION_PROD }}" >> "$GITHUB_ENV"
+            ACR_NAME="${{ vars.ACR_NAME_PROD }}"
+            TF_VAR_prefix="${{ vars.PREFIX_PROD }}"
+            TF_VAR_resource_group_name="${{ vars.RG_PROD }}"
+            TF_VAR_location="${{ vars.LOCATION_PROD }}"
           else
-            echo "ENV_NAME=dev" >> "$GITHUB_ENV"
-            echo "TF_DIR=./infra/envs/dev" >> "$GITHUB_ENV"
+            ENV_NAME="dev"
+            TF_DIR="./infra/envs/dev"
 
-            echo "ACR_NAME=${{ vars.ACR_NAME_DEV }}" >> "$GITHUB_ENV"
-            echo "TF_VAR_prefix=${{ vars.PREFIX_DEV }}" >> "$GITHUB_ENV"
-            echo "TF_VAR_resource_group_name=${{ vars.RG_DEV }}" >> "$GITHUB_ENV"
-            echo "TF_VAR_location=${{ vars.LOCATION_DEV }}" >> "$GITHUB_ENV"
+            ACR_NAME="${{ vars.ACR_NAME_DEV }}"
+            TF_VAR_prefix="${{ vars.PREFIX_DEV }}"
+            TF_VAR_resource_group_name="${{ vars.RG_DEV }}"
+            TF_VAR_location="${{ vars.LOCATION_DEV }}"
           fi
+
+          echo "ENV_NAME=$ENV_NAME" >> "$GITHUB_ENV"
+          echo "TF_DIR=$TF_DIR" >> "$GITHUB_ENV"
+
+          echo "ACR_NAME=$ACR_NAME" >> "$GITHUB_ENV"
+          echo "TF_VAR_prefix=$TF_VAR_prefix" >> "$GITHUB_ENV"
+          echo "TF_VAR_resource_group_name=$TF_VAR_resource_group_name" >> "$GITHUB_ENV"
+          echo "TF_VAR_location=$TF_VAR_location" >> "$GITHUB_ENV"
 
           echo "TARGET_BRANCH=$TARGET_BRANCH"
           echo "ENV_NAME=$ENV_NAME"
