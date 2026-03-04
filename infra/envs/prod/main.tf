@@ -67,28 +67,28 @@ module "acr" {
   source              = "../../modules/acr"
   prefix              = local.prefix
   location            = var.location
-  resource_group_name = var.resource_group_name
+  resource_group_name = azurerm_resource_group.this.name
 }
 
 module "cae" {
   source              = "../../modules/containerapps_env"
   prefix              = local.prefix
   location            = var.location
-  resource_group_name = var.resource_group_name
+  resource_group_name = azurerm_resource_group.this.name
 }
 
 module "identity" {
   source              = "../../modules/identity"
   prefix              = local.prefix
   location            = var.location
-  resource_group_name = var.resource_group_name
+  resource_group_name = azurerm_resource_group.this.name
 }
 
 module "keyvault" {
   source              = "../../modules/keyvault"
   prefix              = local.prefix
   location            = var.location
-  resource_group_name = var.resource_group_name
+  resource_group_name = azurerm_resource_group.this.name
 
   my_secret_value = var.my_secret_value
 }
@@ -97,7 +97,7 @@ module "api" {
   source              = "../../modules/containerapp_api"
   prefix              = local.prefix
   location            = var.location
-  resource_group_name = var.resource_group_name
+  resource_group_name = azurerm_resource_group.this.name
 
   environment_id   = module.cae.environment_id
   acr_id           = module.acr.acr_id
@@ -117,7 +117,7 @@ module "job" {
   source              = "../../modules/containerapp_job"
   prefix              = local.prefix
   location            = var.location
-  resource_group_name = var.resource_group_name
+  resource_group_name = azurerm_resource_group.this.name
 
   environment_id   = module.cae.environment_id
   acr_id           = module.acr.acr_id
