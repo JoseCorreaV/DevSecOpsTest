@@ -33,8 +33,6 @@ jobs:
         run: |
           set -euo pipefail
 
-          # PR -> target = base_ref
-          # push -> target = ref_name
           if [ "${{ github.event_name }}" = "pull_request" ]; then
             TARGET_BRANCH="${{ github.base_ref }}"
           else
@@ -42,8 +40,11 @@ jobs:
           fi
 
           if [ "$TARGET_BRANCH" = "main" ]; then
-            echo "ENV_NAME=prod" >> "$GITHUB_ENV"
-            echo "TF_DIR=./infra/envs/prod" >> "$GITHUB_ENV"
+            ENV_NAME="prod"
+            TF_DIR="./infra/envs/prod"
+
+            echo "ENV_NAME=$ENV_NAME" >> "$GITHUB_ENV"
+            echo "TF_DIR=$TF_DIR" >> "$GITHUB_ENV"
 
             echo "ACR_NAME=${{ vars.ACR_NAME_PROD }}" >> "$GITHUB_ENV"
             echo "TF_VAR_prefix=${{ vars.PREFIX_PROD }}" >> "$GITHUB_ENV"
@@ -51,8 +52,11 @@ jobs:
             echo "TF_VAR_location=${{ vars.LOCATION_PROD }}" >> "$GITHUB_ENV"
             echo "TF_VAR_my_secret_value=${{ secrets.MY_SECRET_VALUE_PROD }}" >> "$GITHUB_ENV"
           else
-            echo "ENV_NAME=dev" >> "$GITHUB_ENV"
-            echo "TF_DIR=./infra/envs/dev" >> "$GITHUB_ENV"
+            ENV_NAME="dev"
+            TF_DIR="./infra/envs/dev"
+
+            echo "ENV_NAME=$ENV_NAME" >> "$GITHUB_ENV"
+            echo "TF_DIR=$TF_DIR" >> "$GITHUB_ENV"
 
             echo "ACR_NAME=${{ vars.ACR_NAME_DEV }}" >> "$GITHUB_ENV"
             echo "TF_VAR_prefix=${{ vars.PREFIX_DEV }}" >> "$GITHUB_ENV"
