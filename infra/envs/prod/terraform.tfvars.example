@@ -1,6 +1,6 @@
 # === PROD ===
 prefix              = "techflowprod"
-location            = "eastus2"
+location            = "eastus"
 resource_group_name = "rg-techflow-prod"
 
 app_image_name = "techflow-api"
